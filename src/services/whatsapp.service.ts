@@ -166,8 +166,27 @@ class WhatsAppService {
    * Initialize WhatsApp connection
    */
   async initialize(): Promise<void> {
-    console.log('📱 Initializing WhatsApp connection...');
+    // Prevent double initialization
+    if (this.waState === 'INITIALIZING' || this.isReady) {
+      console.log('⚠️ Already initializing or connected, skipping...');
+      return;
+    }
+
     this.waState = 'INITIALIZING';
+    
+    // Clean up stale lock files
+    const fs = await import('fs');
+    const authFolder = process.env.AUTH_FOLDER || './auth';
+    const lockFile = `${authFolder}/session-wa-gateway/SingletonLock`;
+    
+    try {
+      if (fs.existsSync(lockFile)) {
+        console.log('🧹 Removing stale lock file...');
+        fs.unlinkSync(lockFile);
+      }
+    } catch (e) {
+      // Ignore errors
+    }
     
     try {
       await this.client.initialize();
