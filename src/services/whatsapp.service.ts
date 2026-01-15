@@ -38,17 +38,23 @@ class WhatsAppService {
           '--disable-accelerated-2d-canvas',
           '--no-first-run',
           '--no-zygote',
-          '--single-process',
           '--disable-gpu',
           '--disable-extensions',
           '--disable-software-rasterizer',
+          '--disable-background-networking',
+          '--disable-default-apps',
+          '--disable-sync',
+          '--disable-translate',
+          '--metrics-recording-only',
+          '--mute-audio',
+          '--no-default-browser-check',
         ],
-        timeout: 60000,
+        timeout: 120000,
       },
       // Web version cache for faster startup
       webVersionCache: {
         type: 'remote',
-        remotePath: 'https://raw.githubusercontent.com/AZeRefSec/wweb-cache/main/wecache/web_cache.json',
+        remotePath: 'https://raw.githubusercontent.com/wppconnect-team/wa-version/main/html/2.2412.54.html',
       },
     });
 
