@@ -19,7 +19,7 @@ interface MessageLog {
  * Following best practices from https://docs.wwebjs.dev/
  */
 class WhatsAppService {
-  private client: Client;
+  private client!: Client;
   private connectionState: ConnectionState = {
     isConnected: false,
     startTime: new Date(),
@@ -41,6 +41,13 @@ class WhatsAppService {
 
   constructor() {
     this.messageDelay = parseInt(process.env.MESSAGE_DELAY_MS || '1000', 10);
+    this.createClient();
+  }
+
+  /**
+   * Create WhatsApp client instance
+   */
+  private createClient(): void {
     const authFolder = process.env.AUTH_FOLDER || './auth';
 
     // Initialize client with LocalAuth for session persistence
@@ -417,34 +424,44 @@ class WhatsAppService {
   }
 
   /**
-   * Logout and clear session, then reinitialize for new QR
+   * Logout and clear session, then recreate client for new QR
    */
   async logout(): Promise<void> {
     console.log('🔓 Logging out...');
     if (this.client) {
       try {
-        await this.client.logout();
+        // Try to logout gracefully
+        try {
+          await this.client.logout();
+          console.log('✅ Logged out from WhatsApp');
+        } catch (logoutError) {
+          console.log('⚠️ Logout failed, will destroy client anyway');
+        }
+
+        // Destroy the old client
+        try {
+          await this.client.destroy();
+          console.log('🗑️ Old client destroyed');
+        } catch (destroyError) {
+          console.log('⚠️ Destroy failed, continuing...');
+        }
+
         // Reset internal state
         this.isReady = false;
         this.connectionState.isConnected = false;
         this.connectionState.phoneNumber = undefined;
-        this.waState = 'LOGGED_OUT';
+        this.waState = 'REINITIALIZING';
         this.qrCodeBase64 = null;
-        console.log('✅ Logged out successfully');
         
-        // Reinitialize to get new QR code
-        console.log('🔄 Reinitializing for new QR code...');
-        this.waState = 'IDLE';
+        // Create new client and reinitialize
+        console.log('🔄 Creating new client for QR code...');
+        this.createClient();
         await this.initialize();
+        
+        console.log('✅ Ready for new QR scan');
       } catch (error) {
-        console.error('❌ Error logging out:', error);
-        // Try to reinitialize anyway
-        this.waState = 'IDLE';
-        try {
-          await this.initialize();
-        } catch (initError) {
-          console.error('❌ Failed to reinitialize:', initError);
-        }
+        console.error('❌ Error during logout process:', error);
+        this.waState = 'ERROR';
         throw error;
       }
     }
