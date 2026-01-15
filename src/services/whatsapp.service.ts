@@ -417,7 +417,7 @@ class WhatsAppService {
   }
 
   /**
-   * Logout and clear session
+   * Logout and clear session, then reinitialize for new QR
    */
   async logout(): Promise<void> {
     console.log('🔓 Logging out...');
@@ -431,8 +431,20 @@ class WhatsAppService {
         this.waState = 'LOGGED_OUT';
         this.qrCodeBase64 = null;
         console.log('✅ Logged out successfully');
+        
+        // Reinitialize to get new QR code
+        console.log('🔄 Reinitializing for new QR code...');
+        this.waState = 'IDLE';
+        await this.initialize();
       } catch (error) {
         console.error('❌ Error logging out:', error);
+        // Try to reinitialize anyway
+        this.waState = 'IDLE';
+        try {
+          await this.initialize();
+        } catch (initError) {
+          console.error('❌ Failed to reinitialize:', initError);
+        }
         throw error;
       }
     }
