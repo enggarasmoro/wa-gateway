@@ -453,16 +453,18 @@ class WhatsAppService {
         this.waState = 'REINITIALIZING';
         this.qrCodeBase64 = null;
         
-        // Create new client and reinitialize
+        // Create new client and reinitialize in background
         console.log('🔄 Creating new client for QR code...');
         this.createClient();
-        await this.initialize();
         
-        console.log('✅ Ready for new QR scan');
+        // Don't await - run in background so HTTP response returns immediately
+        this.initialize()
+          .then(() => console.log('✅ Ready for new QR scan'))
+          .catch(err => console.error('❌ Failed to reinitialize:', err));
+          
       } catch (error) {
         console.error('❌ Error during logout process:', error);
-        this.waState = 'ERROR';
-        throw error;
+        // Don't throw - reinitialize will continue in background
       }
     }
   }
