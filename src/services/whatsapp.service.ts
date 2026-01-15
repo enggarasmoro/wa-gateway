@@ -1,7 +1,18 @@
 import { Client, LocalAuth, Message, WAState } from 'whatsapp-web.js';
 import * as qrcode from 'qrcode-terminal';
+import * as QRCode from 'qrcode';
 import { ConnectionState, MessageResponse } from '../types';
 import { formatPhoneNumber } from '../utils/phone.util';
+
+// Message log entry
+interface MessageLog {
+  timestamp: Date;
+  target: string;
+  message: string;
+  success: boolean;
+  id?: string;
+  error?: string;
+}
 
 /**
  * WhatsApp Service using whatsapp-web.js
@@ -17,6 +28,9 @@ class WhatsAppService {
   private messageDelay: number;
   private isReady: boolean = false;
   private waState: string = 'IDLE';
+  private qrCodeBase64: string | null = null;
+  private messageLogs: MessageLog[] = [];
+  private readonly MAX_LOGS = 100;
 
   constructor() {
     this.messageDelay = parseInt(process.env.MESSAGE_DELAY_MS || '1000', 10);
@@ -62,7 +76,7 @@ class WhatsAppService {
    */
   private setupEventHandlers(): void {
     // QR Code received - User needs to scan
-    this.client.on('qr', (qr: string) => {
+    this.client.on('qr', async (qr: string) => {
       console.log('\n');
       console.log('═'.repeat(50));
       console.log('📱 SCAN QR CODE WITH WHATSAPP');
@@ -70,6 +84,18 @@ class WhatsAppService {
       qrcode.generate(qr, { small: true });
       console.log('═'.repeat(50));
       console.log('\n');
+      
+      // Generate base64 QR code for dashboard
+      try {
+        this.qrCodeBase64 = await QRCode.toDataURL(qr, {
+          width: 300,
+          margin: 2,
+          color: { dark: '#000000', light: '#ffffff' }
+        });
+      } catch (err) {
+        console.error('Failed to generate QR base64:', err);
+      }
+      
       this.connectionState.qrDisplayed = true;
       this.waState = 'WAITING_FOR_QR_SCAN';
     });
@@ -92,6 +118,7 @@ class WhatsAppService {
       this.connectionState.qrDisplayed = false;
       this.isReady = true;
       this.waState = 'CONNECTED';
+      this.qrCodeBase64 = null; // Clear QR code after successful connection
 
       // Get connected phone info
       const info = this.client.info;
@@ -218,6 +245,15 @@ class WhatsAppService {
 
       console.log(`✅ Message sent to +${formattedNumber} (ID: ${result.id.id})`);
 
+      // Log message
+      this.addMessageLog({
+        timestamp: new Date(),
+        target: formattedNumber,
+        message: message.substring(0, 100),
+        success: true,
+        id: result.id.id,
+      });
+
       return {
         success: true,
         status: 'sent',
@@ -227,6 +263,16 @@ class WhatsAppService {
       };
     } catch (error) {
       console.error(`❌ Error sending message:`, error);
+      
+      // Log error
+      this.addMessageLog({
+        timestamp: new Date(),
+        target: formatPhoneNumber(target),
+        message: message.substring(0, 100),
+        success: false,
+        error: (error as Error).message,
+      });
+
       return {
         success: false,
         status: 'error',
@@ -331,6 +377,31 @@ class WhatsAppService {
       } catch (error) {
         console.error('❌ Error logging out:', error);
       }
+    }
+  }
+
+  /**
+   * Get QR code as base64 data URL
+   */
+  getQRCode(): string | null {
+    return this.qrCodeBase64;
+  }
+
+  /**
+   * Get message logs (most recent first)
+   */
+  getMessageLogs(): MessageLog[] {
+    return [...this.messageLogs].reverse();
+  }
+
+  /**
+   * Add entry to message log
+   */
+  private addMessageLog(log: MessageLog): void {
+    this.messageLogs.push(log);
+    // Keep only last MAX_LOGS entries
+    if (this.messageLogs.length > this.MAX_LOGS) {
+      this.messageLogs.shift();
     }
   }
 }

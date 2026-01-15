@@ -69,6 +69,9 @@ RUN ls -la /app/.cache/puppeteer/
 # Copy built files from builder stage
 COPY --from=builder /app/dist ./dist
 
+# Copy public static files
+COPY public/ ./public/
+
 # Create non-root user and set permissions
 RUN groupadd -r pptruser && useradd -r -g pptruser -G audio,video pptruser \
     && mkdir -p /home/pptruser \

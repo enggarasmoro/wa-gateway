@@ -1,0 +1,812 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>WA Gateway Dashboard</title>
+    <style>
+      :root {
+        --bg-primary: #0f0f23;
+        --bg-secondary: #1a1a2e;
+        --bg-card: #16213e;
+        --accent: #00d9ff;
+        --accent-dim: #0a4d5e;
+        --success: #00ff88;
+        --error: #ff4466;
+        --warning: #ffaa00;
+        --text: #e4e4e7;
+        --text-dim: #9ca3af;
+        --border: #374151;
+      }
+
+      * {
+        margin: 0;
+        padding: 0;
+        box-sizing: border-box;
+      }
+
+      body {
+        font-family: "Segoe UI", system-ui, sans-serif;
+        background: var(--bg-primary);
+        color: var(--text);
+        min-height: 100vh;
+        line-height: 1.6;
+      }
+
+      .container {
+        max-width: 1200px;
+        margin: 0 auto;
+        padding: 2rem;
+      }
+
+      /* Login Page */
+      .login-container {
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        min-height: 100vh;
+      }
+
+      .login-card {
+        background: var(--bg-card);
+        border: 1px solid var(--border);
+        border-radius: 16px;
+        padding: 2.5rem;
+        width: 100%;
+        max-width: 400px;
+        box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5);
+      }
+
+      .login-card h1 {
+        text-align: center;
+        margin-bottom: 2rem;
+        color: var(--accent);
+        font-size: 1.75rem;
+      }
+
+      .form-group {
+        margin-bottom: 1.25rem;
+      }
+
+      .form-group label {
+        display: block;
+        margin-bottom: 0.5rem;
+        color: var(--text-dim);
+        font-size: 0.875rem;
+      }
+
+      .form-group input,
+      .form-group textarea {
+        width: 100%;
+        padding: 0.875rem 1rem;
+        background: var(--bg-secondary);
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        color: var(--text);
+        font-size: 1rem;
+        transition: border-color 0.2s;
+      }
+
+      .form-group input:focus,
+      .form-group textarea:focus {
+        outline: none;
+        border-color: var(--accent);
+      }
+
+      .btn {
+        width: 100%;
+        padding: 0.875rem;
+        border: none;
+        border-radius: 8px;
+        font-size: 1rem;
+        font-weight: 600;
+        cursor: pointer;
+        transition: all 0.2s;
+      }
+
+      .btn-primary {
+        background: var(--accent);
+        color: var(--bg-primary);
+      }
+
+      .btn-primary:hover {
+        background: #33e0ff;
+        transform: translateY(-1px);
+      }
+
+      .btn-danger {
+        background: var(--error);
+        color: white;
+      }
+
+      .btn-danger:hover {
+        background: #ff6680;
+      }
+
+      .error-msg {
+        background: rgba(255, 68, 102, 0.1);
+        border: 1px solid var(--error);
+        color: var(--error);
+        padding: 0.75rem 1rem;
+        border-radius: 8px;
+        margin-bottom: 1rem;
+        font-size: 0.875rem;
+        display: none;
+      }
+
+      /* Dashboard */
+      .dashboard {
+        display: none;
+      }
+
+      header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 2rem;
+        padding-bottom: 1rem;
+        border-bottom: 1px solid var(--border);
+      }
+
+      header h1 {
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+        font-size: 1.5rem;
+      }
+
+      header h1 span {
+        color: var(--accent);
+      }
+
+      .btn-logout {
+        background: transparent;
+        border: 1px solid var(--border);
+        color: var(--text-dim);
+        padding: 0.5rem 1rem;
+        border-radius: 6px;
+        cursor: pointer;
+        font-size: 0.875rem;
+        transition: all 0.2s;
+      }
+
+      .btn-logout:hover {
+        border-color: var(--error);
+        color: var(--error);
+      }
+
+      .grid {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 1.5rem;
+      }
+
+      @media (max-width: 768px) {
+        .grid {
+          grid-template-columns: 1fr;
+        }
+      }
+
+      .card {
+        background: var(--bg-card);
+        border: 1px solid var(--border);
+        border-radius: 12px;
+        padding: 1.5rem;
+      }
+
+      .card h2 {
+        font-size: 1rem;
+        color: var(--text-dim);
+        margin-bottom: 1rem;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+      }
+
+      /* Status Card */
+      .status-grid {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 1rem;
+      }
+
+      .status-item {
+        background: var(--bg-secondary);
+        padding: 1rem;
+        border-radius: 8px;
+      }
+
+      .status-item .label {
+        color: var(--text-dim);
+        font-size: 0.75rem;
+        text-transform: uppercase;
+      }
+
+      .status-item .value {
+        font-size: 1.125rem;
+        font-weight: 600;
+        margin-top: 0.25rem;
+      }
+
+      .status-connected {
+        color: var(--success);
+      }
+      .status-disconnected {
+        color: var(--error);
+      }
+      .status-waiting {
+        color: var(--warning);
+      }
+
+      /* QR Code */
+      .qr-container {
+        text-align: center;
+        padding: 1rem;
+      }
+
+      .qr-container img {
+        max-width: 250px;
+        border-radius: 8px;
+        background: white;
+        padding: 10px;
+      }
+
+      .qr-placeholder {
+        background: var(--bg-secondary);
+        padding: 3rem;
+        border-radius: 8px;
+        color: var(--text-dim);
+      }
+
+      /* Send Message */
+      .send-form textarea {
+        min-height: 100px;
+        resize: vertical;
+      }
+
+      .send-result {
+        margin-top: 1rem;
+        padding: 0.75rem 1rem;
+        border-radius: 6px;
+        font-size: 0.875rem;
+        display: none;
+      }
+
+      .send-result.success {
+        background: rgba(0, 255, 136, 0.1);
+        border: 1px solid var(--success);
+        color: var(--success);
+      }
+
+      .send-result.error {
+        background: rgba(255, 68, 102, 0.1);
+        border: 1px solid var(--error);
+        color: var(--error);
+      }
+
+      /* Message Log */
+      .log-container {
+        grid-column: 1 / -1;
+      }
+
+      .log-list {
+        max-height: 300px;
+        overflow-y: auto;
+      }
+
+      .log-item {
+        display: flex;
+        align-items: flex-start;
+        gap: 1rem;
+        padding: 0.875rem;
+        background: var(--bg-secondary);
+        border-radius: 8px;
+        margin-bottom: 0.5rem;
+      }
+
+      .log-status {
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+        margin-top: 6px;
+        flex-shrink: 0;
+      }
+
+      .log-status.success {
+        background: var(--success);
+      }
+      .log-status.error {
+        background: var(--error);
+      }
+
+      .log-content {
+        flex: 1;
+        min-width: 0;
+      }
+
+      .log-target {
+        font-weight: 600;
+        font-size: 0.875rem;
+      }
+
+      .log-message {
+        color: var(--text-dim);
+        font-size: 0.875rem;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+
+      .log-time {
+        color: var(--text-dim);
+        font-size: 0.75rem;
+      }
+
+      .log-empty {
+        color: var(--text-dim);
+        text-align: center;
+        padding: 2rem;
+      }
+
+      /* WA Logout */
+      .wa-logout {
+        margin-top: 1rem;
+        text-align: center;
+      }
+
+      .btn-wa-logout {
+        background: transparent;
+        border: 1px solid var(--error);
+        color: var(--error);
+        padding: 0.625rem 1.25rem;
+        border-radius: 6px;
+        cursor: pointer;
+        font-size: 0.875rem;
+        transition: all 0.2s;
+      }
+
+      .btn-wa-logout:hover {
+        background: var(--error);
+        color: white;
+      }
+
+      /* Loading */
+      .loading {
+        display: inline-block;
+        width: 16px;
+        height: 16px;
+        border: 2px solid var(--text-dim);
+        border-top-color: var(--accent);
+        border-radius: 50%;
+        animation: spin 0.8s linear infinite;
+      }
+
+      @keyframes spin {
+        to {
+          transform: rotate(360deg);
+        }
+      }
+
+      .hidden {
+        display: none !important;
+      }
+    </style>
+  </head>
+  <body>
+    <!-- Login Page -->
+    <div id="loginPage" class="login-container">
+      <div class="login-card">
+        <h1>🔐 WA Gateway</h1>
+        <div id="loginError" class="error-msg"></div>
+        <form id="loginForm">
+          <div class="form-group">
+            <label for="username">Username</label>
+            <input
+              type="text"
+              id="username"
+              name="username"
+              required
+              autocomplete="username"
+            />
+          </div>
+          <div class="form-group">
+            <label for="password">Password</label>
+            <input
+              type="password"
+              id="password"
+              name="password"
+              required
+              autocomplete="current-password"
+            />
+          </div>
+          <button type="submit" class="btn btn-primary">Login</button>
+        </form>
+      </div>
+    </div>
+
+    <!-- Dashboard -->
+    <div id="dashboard" class="dashboard">
+      <div class="container">
+        <header>
+          <h1>📱 <span>WA Gateway</span> Dashboard</h1>
+          <button id="btnDashboardLogout" class="btn-logout">
+            Logout Dashboard
+          </button>
+        </header>
+
+        <div class="grid">
+          <!-- Status Card -->
+          <div class="card">
+            <h2>📊 Status</h2>
+            <div class="status-grid">
+              <div class="status-item">
+                <div class="label">Connection</div>
+                <div id="statusConnection" class="value status-disconnected">
+                  Checking...
+                </div>
+              </div>
+              <div class="status-item">
+                <div class="label">State</div>
+                <div id="statusState" class="value">-</div>
+              </div>
+              <div class="status-item">
+                <div class="label">Phone</div>
+                <div id="statusPhone" class="value">-</div>
+              </div>
+              <div class="status-item">
+                <div class="label">Uptime</div>
+                <div id="statusUptime" class="value">-</div>
+              </div>
+            </div>
+            <div class="wa-logout">
+              <button id="btnWALogout" class="btn-wa-logout">
+                🚪 Logout WhatsApp
+              </button>
+            </div>
+          </div>
+
+          <!-- QR Code -->
+          <div class="card">
+            <h2>📱 QR Code</h2>
+            <div class="qr-container">
+              <div id="qrPlaceholder" class="qr-placeholder">
+                <p>Already connected or waiting for initialization...</p>
+              </div>
+              <img id="qrImage" class="hidden" alt="QR Code" />
+            </div>
+          </div>
+
+          <!-- Send Message -->
+          <div class="card">
+            <h2>📤 Send Message</h2>
+            <form id="sendForm" class="send-form">
+              <div class="form-group">
+                <label for="target">Phone Number (e.g., 6281234567890)</label>
+                <input
+                  type="text"
+                  id="target"
+                  name="target"
+                  placeholder="6281234567890"
+                  required
+                />
+              </div>
+              <div class="form-group">
+                <label for="message">Message</label>
+                <textarea
+                  id="message"
+                  name="message"
+                  placeholder="Type your message..."
+                  required
+                ></textarea>
+              </div>
+              <button type="submit" class="btn btn-primary">
+                Send Message
+              </button>
+            </form>
+            <div id="sendResult" class="send-result"></div>
+          </div>
+
+          <!-- Quick Actions -->
+          <div class="card">
+            <h2>⚡ Info</h2>
+            <div style="color: var(--text-dim); font-size: 0.875rem">
+              <p><strong>API Endpoints:</strong></p>
+              <ul style="margin-top: 0.5rem; padding-left: 1.25rem">
+                <li>POST /api/send - Send message</li>
+                <li>POST /api/broadcast - Broadcast</li>
+                <li>GET /health - Health check</li>
+                <li>GET /api/status - Connection status</li>
+              </ul>
+              <p style="margin-top: 1rem"><strong>Headers:</strong></p>
+              <code
+                style="
+                  display: block;
+                  margin-top: 0.5rem;
+                  padding: 0.5rem;
+                  background: var(--bg-secondary);
+                  border-radius: 4px;
+                "
+              >
+                X-API-Key: your-api-key
+              </code>
+            </div>
+          </div>
+
+          <!-- Message Log -->
+          <div class="card log-container">
+            <h2>📜 Message Log (Last 100)</h2>
+            <div id="logList" class="log-list">
+              <div class="log-empty">No messages yet</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <script>
+      const API_BASE = "/api";
+      let token = localStorage.getItem("wa_token");
+      let refreshInterval;
+
+      // Check if already logged in
+      if (token) {
+        showDashboard();
+      }
+
+      // Login Form
+      document
+        .getElementById("loginForm")
+        .addEventListener("submit", async (e) => {
+          e.preventDefault();
+          const username = document.getElementById("username").value;
+          const password = document.getElementById("password").value;
+          const errorEl = document.getElementById("loginError");
+
+          try {
+            const res = await fetch(`${API_BASE}/auth/login`, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ username, password }),
+            });
+
+            const data = await res.json();
+
+            if (data.success) {
+              token = data.token;
+              localStorage.setItem("wa_token", token);
+              showDashboard();
+            } else {
+              errorEl.textContent = data.error || "Login failed";
+              errorEl.style.display = "block";
+            }
+          } catch (err) {
+            errorEl.textContent = "Connection error";
+            errorEl.style.display = "block";
+          }
+        });
+
+      // Show Dashboard
+      function showDashboard() {
+        document.getElementById("loginPage").style.display = "none";
+        document.getElementById("dashboard").style.display = "block";
+        fetchStatus();
+        fetchLogs();
+        refreshInterval = setInterval(() => {
+          fetchStatus();
+          fetchLogs();
+        }, 5000);
+      }
+
+      // Dashboard Logout
+      document
+        .getElementById("btnDashboardLogout")
+        .addEventListener("click", () => {
+          localStorage.removeItem("wa_token");
+          token = null;
+          clearInterval(refreshInterval);
+          location.reload();
+        });
+
+      // Fetch Status
+      async function fetchStatus() {
+        try {
+          const res = await fetch(`${API_BASE}/dashboard/status`, {
+            headers: { Authorization: `Bearer ${token}` },
+          });
+
+          if (res.status === 401) {
+            localStorage.removeItem("wa_token");
+            location.reload();
+            return;
+          }
+
+          const data = await res.json();
+          if (data.success) {
+            const d = data.data;
+            const connEl = document.getElementById("statusConnection");
+            connEl.textContent = d.isConnected ? "Connected" : "Disconnected";
+            connEl.className =
+              "value " +
+              (d.isConnected
+                ? "status-connected"
+                : d.state === "WAITING_FOR_QR_SCAN"
+                ? "status-waiting"
+                : "status-disconnected");
+
+            document.getElementById("statusState").textContent = d.state || "-";
+            document.getElementById("statusPhone").textContent = d.phoneNumber
+              ? `+${d.phoneNumber}`
+              : "-";
+            document.getElementById("statusUptime").textContent = formatUptime(
+              d.uptime
+            );
+
+            // QR Code
+            if (d.hasQR && !d.isConnected) {
+              fetchQR();
+            } else {
+              document.getElementById("qrImage").classList.add("hidden");
+              document
+                .getElementById("qrPlaceholder")
+                .classList.remove("hidden");
+              document.getElementById("qrPlaceholder").innerHTML = d.isConnected
+                ? '<p style="color: var(--success);">✅ Connected!</p>'
+                : "<p>Waiting for QR code...</p>";
+            }
+          }
+        } catch (err) {
+          console.error("Status fetch error:", err);
+        }
+      }
+
+      // Fetch QR Code
+      async function fetchQR() {
+        try {
+          const res = await fetch(`${API_BASE}/dashboard/qr`, {
+            headers: { Authorization: `Bearer ${token}` },
+          });
+          const data = await res.json();
+          if (data.success && data.data.qrCode) {
+            document.getElementById("qrImage").src = data.data.qrCode;
+            document.getElementById("qrImage").classList.remove("hidden");
+            document.getElementById("qrPlaceholder").classList.add("hidden");
+          }
+        } catch (err) {
+          console.error("QR fetch error:", err);
+        }
+      }
+
+      // Fetch Logs
+      async function fetchLogs() {
+        try {
+          const res = await fetch(`${API_BASE}/dashboard/logs`, {
+            headers: { Authorization: `Bearer ${token}` },
+          });
+          const data = await res.json();
+          if (data.success) {
+            renderLogs(data.data);
+          }
+        } catch (err) {
+          console.error("Logs fetch error:", err);
+        }
+      }
+
+      // Render Logs
+      function renderLogs(logs) {
+        const container = document.getElementById("logList");
+        if (!logs || logs.length === 0) {
+          container.innerHTML = '<div class="log-empty">No messages yet</div>';
+          return;
+        }
+
+        container.innerHTML = logs
+          .map(
+            (log) => `
+        <div class="log-item">
+          <div class="log-status ${log.success ? "success" : "error"}"></div>
+          <div class="log-content">
+            <div class="log-target">+${log.target}</div>
+            <div class="log-message">${escapeHtml(log.message)}</div>
+            ${
+              log.error
+                ? `<div class="log-message" style="color: var(--error);">${escapeHtml(
+                    log.error
+                  )}</div>`
+                : ""
+            }
+          </div>
+          <div class="log-time">${formatTime(log.timestamp)}</div>
+        </div>
+      `
+          )
+          .join("");
+      }
+
+      // Send Message
+      document
+        .getElementById("sendForm")
+        .addEventListener("submit", async (e) => {
+          e.preventDefault();
+          const target = document.getElementById("target").value;
+          const message = document.getElementById("message").value;
+          const resultEl = document.getElementById("sendResult");
+
+          resultEl.style.display = "none";
+
+          try {
+            const res = await fetch(`${API_BASE}/dashboard/send`, {
+              method: "POST",
+              headers: {
+                "Content-Type": "application/json",
+                Authorization: `Bearer ${token}`,
+              },
+              body: JSON.stringify({ target, message }),
+            });
+
+            const data = await res.json();
+            resultEl.textContent = data.message;
+            resultEl.className =
+              "send-result " + (data.success ? "success" : "error");
+            resultEl.style.display = "block";
+
+            if (data.success) {
+              document.getElementById("message").value = "";
+              fetchLogs();
+            }
+          } catch (err) {
+            resultEl.textContent = "Failed to send message";
+            resultEl.className = "send-result error";
+            resultEl.style.display = "block";
+          }
+        });
+
+      // WA Logout
+      document
+        .getElementById("btnWALogout")
+        .addEventListener("click", async () => {
+          if (
+            !confirm(
+              "Are you sure you want to logout WhatsApp? You will need to scan QR code again."
+            )
+          ) {
+            return;
+          }
+
+          try {
+            const res = await fetch(`${API_BASE}/dashboard/logout`, {
+              method: "POST",
+              headers: { Authorization: `Bearer ${token}` },
+            });
+            const data = await res.json();
+            alert(data.message || (data.success ? "Logged out" : "Failed"));
+            fetchStatus();
+          } catch (err) {
+            alert("Failed to logout");
+          }
+        });
+
+      // Helpers
+      function formatUptime(seconds) {
+        if (!seconds) return "-";
+        const h = Math.floor(seconds / 3600);
+        const m = Math.floor((seconds % 3600) / 60);
+        const s = seconds % 60;
+        return `${h}h ${m}m ${s}s`;
+      }
+
+      function formatTime(timestamp) {
+        return new Date(timestamp).toLocaleString("id-ID", {
+          hour: "2-digit",
+          minute: "2-digit",
+          day: "2-digit",
+          month: "short",
+        });
+      }
+
+      function escapeHtml(text) {
+        const div = document.createElement("div");
+        div.textContent = text;
+        return div.innerHTML;
+      }
+    </script>
+  </body>
+</html>
