@@ -211,19 +211,10 @@ class WhatsAppService {
 
       console.log(`📤 Sending message to: +${formattedNumber}`);
 
-      // Check if number is registered on WhatsApp
-      const isRegistered = await this.client.isRegisteredUser(chatId);
-      if (!isRegistered) {
-        console.log(`⚠️ Number +${formattedNumber} is not registered on WhatsApp`);
-        return {
-          success: false,
-          status: 'invalid_number',
-          message: `Number +${formattedNumber} is not registered on WhatsApp`,
-          target: formattedNumber,
-        };
-      }
-
-      const result = await this.client.sendMessage(chatId, message);
+      // Send message with sendSeen: false to avoid markedUnread error
+      const result = await this.client.sendMessage(chatId, message, {
+        sendSeen: false,
+      });
 
       console.log(`✅ Message sent to +${formattedNumber} (ID: ${result.id.id})`);
 
