@@ -1,3 +1,26 @@
+# =============================================
+# Stage 1: Build
+# =============================================
+FROM node:20-slim AS builder
+
+WORKDIR /app
+
+# Copy package files
+COPY package*.json ./
+
+# Install all dependencies (including devDependencies)
+RUN npm ci
+
+# Copy source code
+COPY tsconfig.json ./
+COPY src/ ./src/
+
+# Build TypeScript
+RUN npm run build
+
+# =============================================
+# Stage 2: Production
+# =============================================
 FROM node:20-slim
 
 # Install Chromium dependencies for Puppeteer
@@ -32,11 +55,11 @@ WORKDIR /app
 # Copy package files
 COPY package*.json ./
 
-# Install dependencies
+# Install production dependencies only
 RUN npm ci --only=production
 
-# Copy source code
-COPY dist/ ./dist/
+# Copy built files from builder stage
+COPY --from=builder /app/dist ./dist
 
 # Create auth directory
 RUN mkdir -p /app/auth
@@ -50,7 +73,7 @@ USER wagateway
 EXPOSE 3001
 
 # Health check
-HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
+HEALTHCHECK --interval=30s --timeout=10s --start-period=90s --retries=3 \
     CMD wget --no-verbose --tries=1 --spider http://localhost:3001/health || exit 1
 
 # Start the application
