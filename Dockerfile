@@ -23,7 +23,7 @@ RUN npm run build
 # =============================================
 FROM node:20-bullseye-slim
 
-# Install dependencies for Puppeteer
+# Install dependencies for Puppeteer/Chrome
 RUN apt-get update && apt-get install -y \
     wget \
     gnupg \
@@ -55,9 +55,11 @@ WORKDIR /app
 # Copy package files
 COPY package*.json ./
 
-# Install production dependencies + download Chromium via Puppeteer
-ENV PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=false
+# Install production dependencies
 RUN npm ci --only=production
+
+# Install Chrome for Puppeteer explicitly
+RUN npx puppeteer browsers install chrome
 
 # Copy built files from builder stage
 COPY --from=builder /app/dist ./dist
@@ -65,7 +67,13 @@ COPY --from=builder /app/dist ./dist
 # Create auth directory with proper permissions
 RUN mkdir -p /app/auth && chmod 777 /app/auth
 
-# Add user for running Chrome in sandbox-less mode
+# Create cache directory for puppeteer
+RUN mkdir -p /app/.cache && chmod 777 /app/.cache
+
+# Set Puppeteer cache directory
+ENV PUPPETEER_CACHE_DIR=/app/.cache
+
+# Add user for running Chrome
 RUN groupadd -r pptruser && useradd -r -g pptruser -G audio,video pptruser \
     && mkdir -p /home/pptruser/Downloads \
     && chown -R pptruser:pptruser /home/pptruser \
