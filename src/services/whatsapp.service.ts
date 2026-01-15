@@ -39,15 +39,14 @@ class WhatsAppService {
       auth: state,
       printQRInTerminal: false, // We'll handle QR display ourselves
       logger: pino({ level: 'silent' }) as any,
-      // Use proper browser fingerprint to avoid 405 error
-      browser: ['Ubuntu', 'Chrome', '120.0.6099.109'],
+      // Use Baileys default browser for stability
+      browser: ['Baileys', 'Chrome', '4.0.0'],
       connectTimeoutMs: 60000,
       defaultQueryTimeoutMs: 60000,
       keepAliveIntervalMs: 25000,
       retryRequestDelayMs: 2000,
-      // Improve connection stability
       syncFullHistory: false,
-      markOnlineOnConnect: false,
+      markOnlineOnConnect: true,
     });
 
     // Handle connection updates
