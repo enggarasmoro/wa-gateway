@@ -424,9 +424,16 @@ class WhatsAppService {
     if (this.client) {
       try {
         await this.client.logout();
+        // Reset internal state
+        this.isReady = false;
+        this.connectionState.isConnected = false;
+        this.connectionState.phoneNumber = undefined;
+        this.waState = 'LOGGED_OUT';
+        this.qrCodeBase64 = null;
         console.log('✅ Logged out successfully');
       } catch (error) {
         console.error('❌ Error logging out:', error);
+        throw error;
       }
     }
   }
