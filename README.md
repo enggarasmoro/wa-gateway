@@ -1,15 +1,16 @@
 # WA Gateway Service
 
-Self-hosted WhatsApp Gateway menggunakan [Baileys](https://github.com/WhiskeySockets/Baileys).
+Self-hosted WhatsApp Gateway menggunakan [whatsapp-web.js](https://wwebjs.dev/).
 
 ## ✨ Features
 
-- 📱 Multi-device WhatsApp Web
+- 📱 WhatsApp Web via Puppeteer
 - 🔐 API Key Authentication
 - 📤 Send single & broadcast messages
-- 💾 Persistent session storage
+- ✅ Number validation before sending
+- 💾 Persistent session (LocalAuth)
+- 🔄 Auto-reconnect on disconnect
 - 🐳 Docker ready
-- 🔄 Auto-reconnect
 
 ## 🚀 Quick Start
 
@@ -44,15 +45,6 @@ npm start
 GET /health
 ```
 
-Response:
-
-```json
-{
-  "status": "healthy",
-  "whatsapp": "connected"
-}
-```
-
 ### Send Message
 
 ```http
@@ -63,17 +55,6 @@ Content-Type: application/json
 {
   "target": "6281234567890",
   "message": "Hello World!"
-}
-```
-
-Response:
-
-```json
-{
-  "success": true,
-  "status": "sent",
-  "message": "Message sent successfully",
-  "target": "6281234567890"
 }
 ```
 
@@ -102,15 +83,14 @@ X-API-Key: your-api-key
 | Variable           | Default | Description                      |
 | ------------------ | ------- | -------------------------------- |
 | `PORT`             | 3001    | Server port                      |
-| `HOST`             | 0.0.0.0 | Server host                      |
 | `API_KEY`          | -       | API key for authentication       |
 | `MESSAGE_DELAY_MS` | 1000    | Delay between broadcast messages |
 | `AUTH_FOLDER`      | ./auth  | Session storage path             |
-| `LOG_LEVEL`        | info    | Logging level                    |
+| `LOG_LEVEL`        | info    | Logging level (info/debug)       |
 
 ## 🔐 Authentication
 
-All `/api/*` endpoints require `X-API-Key` header (except health check).
+All `/api/*` endpoints require `X-API-Key` header.
 
 ```bash
 curl -X POST http://localhost:3001/api/send \
@@ -124,15 +104,13 @@ curl -X POST http://localhost:3001/api/send \
 ```
 wa-gateway-service/
 ├── src/
-│   ├── index.ts              # Express server
+│   ├── index.ts                  # Express server
 │   ├── services/
-│   │   └── whatsapp.service.ts   # Baileys wrapper
+│   │   └── whatsapp.service.ts   # whatsapp-web.js client
 │   ├── routes/
 │   │   └── message.route.ts      # API routes
 │   ├── middlewares/
 │   │   └── auth.middleware.ts    # API key auth
-│   ├── utils/
-│   │   └── phone.util.ts         # Phone number formatter
 │   └── types/
 │       └── index.ts              # Type definitions
 ├── Dockerfile
@@ -146,17 +124,13 @@ wa-gateway-service/
 2. Check logs for QR code
 3. Scan with WhatsApp
 
-```bash
-docker logs -f wa-gateway
-```
-
 Session is persisted in `/app/auth` volume.
 
 ## ⚠️ Important Notes
 
-- Use a **dedicated WhatsApp number** (not personal)
-- Keep message volume reasonable to avoid bans
-- WhatsApp may update protocol - keep Baileys updated
+- Use a **dedicated WhatsApp number**
+- Keep message volume reasonable
+- Server needs **768MB+ RAM** for Puppeteer/Chromium
 
 ## 📄 License
 
