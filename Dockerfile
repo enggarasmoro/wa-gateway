@@ -5,17 +5,12 @@ FROM node:20-slim AS builder
 
 WORKDIR /app
 
-# Copy package files
 COPY package*.json ./
-
-# Install all dependencies (including devDependencies)
 RUN npm ci
 
-# Copy source code
 COPY tsconfig.json ./
 COPY src/ ./src/
 
-# Build TypeScript
 RUN npm run build
 
 # =============================================
@@ -52,41 +47,39 @@ RUN apt-get update && apt-get install -y \
 
 WORKDIR /app
 
+# Set Puppeteer cache directory BEFORE installation
+ENV PUPPETEER_CACHE_DIR=/app/.cache/puppeteer
+
+# Create directories with proper permissions
+RUN mkdir -p /app/.cache/puppeteer /app/auth \
+    && chmod -R 777 /app/.cache /app/auth
+
 # Copy package files
 COPY package*.json ./
 
 # Install production dependencies
 RUN npm ci --only=production
 
-# Install Chrome for Puppeteer explicitly
+# Install Chrome explicitly with correct cache path
 RUN npx puppeteer browsers install chrome
+
+# Verify Chrome was installed
+RUN ls -la /app/.cache/puppeteer/
 
 # Copy built files from builder stage
 COPY --from=builder /app/dist ./dist
 
-# Create auth directory with proper permissions
-RUN mkdir -p /app/auth && chmod 777 /app/auth
-
-# Create cache directory for puppeteer
-RUN mkdir -p /app/.cache && chmod 777 /app/.cache
-
-# Set Puppeteer cache directory
-ENV PUPPETEER_CACHE_DIR=/app/.cache
-
-# Add user for running Chrome
+# Create non-root user and set permissions
 RUN groupadd -r pptruser && useradd -r -g pptruser -G audio,video pptruser \
-    && mkdir -p /home/pptruser/Downloads \
+    && mkdir -p /home/pptruser \
     && chown -R pptruser:pptruser /home/pptruser \
     && chown -R pptruser:pptruser /app
 
 USER pptruser
 
-# Expose port
 EXPOSE 3001
 
-# Health check
 HEALTHCHECK --interval=30s --timeout=10s --start-period=120s --retries=3 \
     CMD wget --no-verbose --tries=1 --spider http://localhost:3001/health || exit 1
 
-# Start the application
 CMD ["node", "dist/index.js"]
