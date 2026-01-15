@@ -10,7 +10,7 @@
     "clean": "rm -rf dist"
   },
   "dependencies": {
-    "@whiskeysockets/baileys": "^6.7.16",
+    "@whiskeysockets/baileys": "6.6.0",
     "express": "^4.21.2",
     "pino": "^9.6.0",
     "qrcode-terminal": "^0.12.0",

@@ -38,7 +38,7 @@ class WhatsAppService {
     this.socket = makeWASocket({
       auth: state,
       printQRInTerminal: false, // We'll handle QR display ourselves
-      logger: pino({ level: 'silent' }),
+      logger: pino({ level: 'silent' }) as any,
       // Use proper browser fingerprint to avoid 405 error
       browser: ['Ubuntu', 'Chrome', '120.0.6099.109'],
       connectTimeoutMs: 60000,
