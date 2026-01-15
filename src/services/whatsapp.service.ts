@@ -32,6 +32,13 @@ class WhatsAppService {
   private messageLogs: MessageLog[] = [];
   private readonly MAX_LOGS = 100;
 
+  // Anti-ban features
+  private dailyMessageCount: number = 0;
+  private lastResetDate: string = new Date().toDateString();
+  private readonly DAILY_MESSAGE_LIMIT = parseInt(process.env.DAILY_MESSAGE_LIMIT || '500', 10);
+  private readonly TYPING_DELAY_MIN = 1000; // 1 second
+  private readonly TYPING_DELAY_MAX = 3000; // 3 seconds
+
   constructor() {
     this.messageDelay = parseInt(process.env.MESSAGE_DELAY_MS || '1000', 10);
     const authFolder = process.env.AUTH_FOLDER || './auth';
@@ -236,14 +243,51 @@ class WhatsAppService {
       // whatsapp-web.js format: number@c.us
       const chatId = `${formattedNumber}@c.us`;
 
+      // Reset daily counter if new day
+      const today = new Date().toDateString();
+      if (this.lastResetDate !== today) {
+        this.dailyMessageCount = 0;
+        this.lastResetDate = today;
+        console.log('📅 Daily message counter reset');
+      }
+
+      // Check daily limit
+      if (this.dailyMessageCount >= this.DAILY_MESSAGE_LIMIT) {
+        console.log(`⚠️ Daily message limit reached (${this.DAILY_MESSAGE_LIMIT})`);
+        return {
+          success: false,
+          status: 'error',
+          message: `Daily message limit reached (${this.DAILY_MESSAGE_LIMIT}). Try again tomorrow.`,
+          target: formattedNumber,
+        };
+      }
+
       console.log(`📤 Sending message to: +${formattedNumber}`);
+
+      // Anti-ban: Get chat and simulate typing
+      try {
+        const chat = await this.client.getChatById(chatId);
+        await chat.sendStateTyping();
+        console.log(`⌨️ Simulating typing...`);
+        
+        // Random typing delay (1-3 seconds)
+        const typingDelay = this.randomDelay(this.TYPING_DELAY_MIN, this.TYPING_DELAY_MAX);
+        await this.delay(typingDelay);
+        await chat.clearState();
+      } catch (typingError) {
+        // Ignore typing errors, continue with sending
+        console.log(`⚠️ Could not simulate typing, continuing...`);
+      }
 
       // Send message with sendSeen: false to avoid markedUnread error
       const result = await this.client.sendMessage(chatId, message, {
         sendSeen: false,
       });
 
-      console.log(`✅ Message sent to +${formattedNumber} (ID: ${result.id.id})`);
+      // Increment daily counter
+      this.dailyMessageCount++;
+
+      console.log(`✅ Message sent to +${formattedNumber} (ID: ${result.id.id}) [${this.dailyMessageCount}/${this.DAILY_MESSAGE_LIMIT}]`);
 
       // Log message
       this.addMessageLog({
@@ -348,6 +392,13 @@ class WhatsAppService {
    */
   private delay(ms: number): Promise<void> {
     return new Promise((resolve) => setTimeout(resolve, ms));
+  }
+
+  /**
+   * Random delay helper for anti-ban
+   */
+  private randomDelay(min: number, max: number): number {
+    return Math.floor(Math.random() * (max - min + 1)) + min;
   }
 
   /**
