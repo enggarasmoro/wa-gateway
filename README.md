@@ -1,20 +1,20 @@
 # WA Gateway Service
 
-Self-hosted WhatsApp Gateway menggunakan [whatsapp-web.js](https://wwebjs.dev/).
+Self-hosted WhatsApp Gateway dengan Web Dashboard.
 
 ## ✨ Features
 
 - 📱 WhatsApp Web via Puppeteer
+- 🖥️ **Web Dashboard** dengan login
 - 🔐 API Key Authentication
 - 📤 Send single & broadcast messages
-- ✅ Number validation before sending
 - 💾 Persistent session (LocalAuth)
 - 🔄 Auto-reconnect on disconnect
 - 🐳 Docker ready
 
 ## 🚀 Quick Start
 
-### Docker (Recommended)
+### Docker
 
 ```bash
 docker build -t wa-gateway .
@@ -22,115 +22,71 @@ docker run -d \
   --name wa-gateway \
   -p 3001:3001 \
   -e API_KEY=your-api-key \
+  -e DASHBOARD_USERNAME=admin \
+  -e DASHBOARD_PASSWORD=your-password \
   -v wa-auth:/app/auth \
   wa-gateway
-
-# Scan QR code
-docker logs -f wa-gateway
 ```
 
-### Manual
+### Access Dashboard
 
-```bash
-npm install
-npm run build
-npm start
 ```
+http://localhost:3001/
+```
+
+Login with `DASHBOARD_USERNAME` and `DASHBOARD_PASSWORD`.
 
 ## 📡 API Endpoints
 
-### Health Check
+### Public
 
-```http
-GET /health
-```
+- `GET /health` - Health check
 
-### Send Message
+### Dashboard (JWT Auth)
 
-```http
-POST /api/send
-X-API-Key: your-api-key
-Content-Type: application/json
+- `POST /api/auth/login` - Login
+- `GET /api/dashboard/status` - Connection status
+- `GET /api/dashboard/qr` - QR code (base64)
+- `POST /api/dashboard/send` - Send message
+- `POST /api/dashboard/logout` - Logout WhatsApp
 
-{
-  "target": "6281234567890",
-  "message": "Hello World!"
-}
-```
+### API (X-API-Key Header)
 
-### Broadcast
-
-```http
-POST /api/broadcast
-X-API-Key: your-api-key
-Content-Type: application/json
-
-{
-  "targets": ["6281234567890", "6289876543210"],
-  "message": "Broadcast message"
-}
-```
-
-### Status
-
-```http
-GET /api/status
-X-API-Key: your-api-key
-```
+- `POST /api/send` - Send message
+- `POST /api/broadcast` - Broadcast
 
 ## ⚙️ Configuration
 
-| Variable           | Default | Description                      |
-| ------------------ | ------- | -------------------------------- |
-| `PORT`             | 3001    | Server port                      |
-| `API_KEY`          | -       | API key for authentication       |
-| `MESSAGE_DELAY_MS` | 1000    | Delay between broadcast messages |
-| `AUTH_FOLDER`      | ./auth  | Session storage path             |
-| `LOG_LEVEL`        | info    | Logging level (info/debug)       |
-
-## 🔐 Authentication
-
-All `/api/*` endpoints require `X-API-Key` header.
-
-```bash
-curl -X POST http://localhost:3001/api/send \
-  -H "Content-Type: application/json" \
-  -H "X-API-Key: your-api-key" \
-  -d '{"target": "6281234567890", "message": "Test"}'
-```
+| Variable             | Default | Description                 |
+| -------------------- | ------- | --------------------------- |
+| `PORT`               | 3001    | Server port                 |
+| `API_KEY`            | -       | API key for external access |
+| `DASHBOARD_USERNAME` | admin   | Dashboard login             |
+| `DASHBOARD_PASSWORD` | -       | Dashboard password          |
+| `JWT_SECRET`         | -       | Secret for JWT tokens       |
+| `MESSAGE_DELAY_MS`   | 1000    | Delay between broadcasts    |
+| `AUTH_FOLDER`        | ./auth  | Session storage             |
 
 ## 📁 Project Structure
 
 ```
 wa-gateway-service/
 ├── src/
-│   ├── index.ts                  # Express server
+│   ├── index.ts              # Express server
 │   ├── services/
-│   │   └── whatsapp.service.ts   # whatsapp-web.js client
+│   │   ├── whatsapp.service.ts
+│   │   └── auth.service.ts
 │   ├── routes/
-│   │   └── message.route.ts      # API routes
+│   │   ├── message.route.ts
+│   │   └── dashboard.route.ts
 │   ├── middlewares/
-│   │   └── auth.middleware.ts    # API key auth
-│   └── types/
-│       └── index.ts              # Type definitions
+│   │   ├── auth.middleware.ts
+│   │   └── dashboard.auth.ts
+│   └── public/
+│       └── index.html        # Dashboard UI
 ├── Dockerfile
-├── package.json
-└── tsconfig.json
+└── package.json
 ```
-
-## 📱 First-time Setup
-
-1. Start the service
-2. Check logs for QR code
-3. Scan with WhatsApp
-
-Session is persisted in `/app/auth` volume.
-
-## ⚠️ Important Notes
-
-- Use a **dedicated WhatsApp number**
-- Keep message volume reasonable
-- Server needs **768MB+ RAM** for Puppeteer/Chromium
 
 ## 📄 License
 
