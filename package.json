@@ -10,7 +10,7 @@
     "clean": "rm -rf dist"
   },
   "dependencies": {
-    "whatsapp-web.js": "^1.26.0",
+    "whatsapp-web.js": "github:pedroslopez/whatsapp-web.js#main",
     "express": "^4.21.2",
     "qrcode-terminal": "^0.12.0",
     "dotenv": "^16.4.7"
