@@ -16,7 +16,7 @@ class WhatsAppService {
   };
   private messageDelay: number;
   private isReady: boolean = false;
-  private waState: string = 'INITIALIZING';
+  private waState: string = 'IDLE';
 
   constructor() {
     this.messageDelay = parseInt(process.env.MESSAGE_DELAY_MS || '1000', 10);
