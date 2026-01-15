@@ -1,0 +1,9 @@
+node_modules/
+dist/
+auth/
+*.log
+.env
+.git/
+.github/
+README.md
+*.md
