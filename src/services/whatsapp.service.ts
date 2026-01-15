@@ -39,11 +39,15 @@ class WhatsAppService {
       auth: state,
       printQRInTerminal: false, // We'll handle QR display ourselves
       logger: pino({ level: 'silent' }),
-      browser: ['WA Gateway', 'Chrome', '120.0.0'],
+      // Use proper browser fingerprint to avoid 405 error
+      browser: ['Ubuntu', 'Chrome', '120.0.6099.109'],
       connectTimeoutMs: 60000,
       defaultQueryTimeoutMs: 60000,
-      keepAliveIntervalMs: 30000,
+      keepAliveIntervalMs: 25000,
       retryRequestDelayMs: 2000,
+      // Improve connection stability
+      syncFullHistory: false,
+      markOnlineOnConnect: false,
     });
 
     // Handle connection updates
