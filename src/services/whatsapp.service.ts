@@ -721,7 +721,12 @@ class WhatsAppService {
       await failedClient.destroy();
       console.log(`🗑️ Destroyed failed WhatsApp client after ${reason}`);
     } catch (error) {
-      console.warn(`⚠️ Failed to destroy WhatsApp client after ${reason}: ${getErrorMessage(error)}`);
+      const message = getErrorMessage(error);
+      if (message.includes("Cannot read properties of null (reading 'close')")) {
+        console.log(`ℹ️ Skipped browser cleanup after ${reason} because Chrome never launched`);
+      } else {
+        console.warn(`⚠️ Failed to destroy WhatsApp client after ${reason}: ${message}`);
+      }
     }
 
     this.resetConnectionState('RETRYING_INITIALIZE');
