@@ -21,14 +21,19 @@ docker build -t wa-gateway .
 docker run -d \
   --name wa-gateway \
   -p 3001:3001 \
+  --cap-add=SYS_ADMIN \
   -e API_KEY=replace-with-a-long-random-api-key \
   -e DASHBOARD_USERNAME=replace-with-dashboard-username \
   -e DASHBOARD_PASSWORD=replace-with-a-long-random-dashboard-password \
   -e JWT_SECRET=replace-with-a-different-long-random-jwt-secret \
   -e TRUST_PROXY=false \
   -v wa-auth:/app/auth \
-  wa-gateway
+wa-gateway
 ```
+
+If the container runs behind Nginx, Traefik, Cloudflare Tunnel, or another proxy that sets `X-Forwarded-For`, set `TRUST_PROXY` to the trusted hop count or proxy subnet, for example `TRUST_PROXY=1`. Do not enable it for direct public exposure.
+
+Chrome sandboxing needs container support. The recommended Docker mode is `--cap-add=SYS_ADMIN` with `CHROME_NO_SANDBOX=false`. If the runtime cannot provide Chrome sandbox support, explicitly set `CHROME_NO_SANDBOX=true`; this adds `--no-sandbox`, `--disable-setuid-sandbox`, and `--no-zygote` together.
 
 ### Access Dashboard
 
@@ -62,7 +67,7 @@ Login with `DASHBOARD_USERNAME` and `DASHBOARD_PASSWORD`. The service fails at s
 | Variable             | Default | Description                 |
 | -------------------- | ------- | --------------------------- |
 | `PORT`               | 3001    | Server port                 |
-| `TRUST_PROXY`        | false   | Express trust proxy setting; set to trusted proxy/CIDR or hop count only behind a reverse proxy |
+| `TRUST_PROXY`        | false   | Express trust proxy setting; set to trusted proxy/CIDR or hop count only behind a reverse proxy that sends `X-Forwarded-For` |
 | `API_KEY`            | required | API key for external access |
 | `API_SEND_RATE_LIMIT_PER_MINUTE` | 30 | Per-IP send/status API request limit |
 | `DASHBOARD_USERNAME` | required | Dashboard login             |
@@ -75,7 +80,7 @@ Login with `DASHBOARD_USERNAME` and `DASHBOARD_PASSWORD`. The service fails at s
 | `WHATSAPP_INITIALIZE_RETRY_DELAY_MS` | 5000 | Delay between initialization retries |
 | `WHATSAPP_AUTH_TIMEOUT_MS` | 120000 | Max wait for whatsapp-web.js auth/injection readiness |
 | `PUPPETEER_PROTOCOL_TIMEOUT_MS` | 180000 | Chrome DevTools protocol timeout for Puppeteer calls |
-| `CHROME_NO_SANDBOX` | false | Add Chrome `--no-sandbox` flags only when the runtime cannot support sandboxing |
+| `CHROME_NO_SANDBOX` | false | Add Chrome no-sandbox flags only when the runtime cannot support sandboxing |
 | `LOG_MESSAGE_CONTENT` | false | Store dashboard message previews; disabled redacts message content |
 
 ## 📁 Project Structure

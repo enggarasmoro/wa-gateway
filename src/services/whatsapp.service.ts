@@ -87,11 +87,10 @@ class WhatsAppService {
         headless: true,
         protocolTimeout: this.PUPPETEER_PROTOCOL_TIMEOUT_MS,
         args: [
-          ...(this.CHROME_NO_SANDBOX ? ['--no-sandbox', '--disable-setuid-sandbox'] : []),
+          ...(this.CHROME_NO_SANDBOX ? ['--no-sandbox', '--disable-setuid-sandbox', '--no-zygote'] : []),
           '--disable-dev-shm-usage',
           '--disable-accelerated-2d-canvas',
           '--no-first-run',
-          '--no-zygote',
           '--disable-gpu',
           '--disable-extensions',
           '--disable-software-rasterizer',
@@ -590,6 +589,10 @@ class WhatsAppService {
       return true;
     }
 
+    if (this.isInitializing || ['ERROR', 'RETRYING_INITIALIZE', 'IDLE'].includes(this.waState)) {
+      return false;
+    }
+
     try {
       const state = await this.client.getState();
 
@@ -739,9 +742,6 @@ class WhatsAppService {
 
       this.initialize().catch((err) => {
         console.error('❌ Reconnection failed:', err);
-        if (!this.isLoggingOut && !this.isShuttingDown) {
-          this.scheduleReconnect(this.clientGeneration);
-        }
       });
     }, 10000);
   }
