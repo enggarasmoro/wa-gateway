@@ -6,6 +6,7 @@ import { loadSecurityConfig } from '../config/security.config';
 const securityConfig = loadSecurityConfig();
 const JWT_SECRET = securityConfig.jwtSecret;
 const JWT_EXPIRY = '1h';
+export const DASHBOARD_TOKEN_COOKIE = 'wa_dashboard_token';
 
 const DASHBOARD_USERNAME = securityConfig.dashboardUsername;
 const DASHBOARD_PASSWORD = securityConfig.dashboardPassword;
@@ -14,6 +15,27 @@ const BCRYPT_ROUNDS = securityConfig.bcryptRounds;
 export interface DashboardTokenPayload extends JwtPayload {
   username: string;
   role: 'admin';
+}
+
+export function getCookieValue(cookieHeader: string | undefined, name: string): string | undefined {
+  if (!cookieHeader) {
+    return undefined;
+  }
+
+  const cookies = cookieHeader.split(';');
+  for (const cookie of cookies) {
+    const separatorIndex = cookie.indexOf('=');
+    if (separatorIndex === -1) {
+      continue;
+    }
+
+    const cookieName = cookie.slice(0, separatorIndex).trim();
+    if (cookieName === name) {
+      return decodeURIComponent(cookie.slice(separatorIndex + 1).trim());
+    }
+  }
+
+  return undefined;
 }
 
 // Login attempt tracking for rate limiting

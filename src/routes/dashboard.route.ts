@@ -1,5 +1,5 @@
 import { Router, Request, Response } from 'express';
-import { authService } from '../services/auth.service';
+import { authService, DASHBOARD_TOKEN_COOKIE } from '../services/auth.service';
 import { whatsappService } from '../services/whatsapp.service';
 import { dashboardAuth } from '../middlewares/dashboard.auth';
 import { SendMessageOptions } from '../types';
@@ -12,6 +12,27 @@ import { getMessageResponseHttpStatus } from '../utils/http-status.util';
 import rateLimit from 'express-rate-limit';
 
 const router = Router();
+const COOKIE_MAX_AGE_SECONDS = 60 * 60;
+
+function shouldUseSecureCookie(): boolean {
+  return process.env.NODE_ENV === 'production' || process.env.APP_ENV === 'production' || process.env.APP_ENV === 'staging';
+}
+
+function buildDashboardCookie(token: string, maxAgeSeconds: number): string {
+  const parts = [
+    `${DASHBOARD_TOKEN_COOKIE}=${encodeURIComponent(token)}`,
+    'HttpOnly',
+    'SameSite=Strict',
+    'Path=/',
+    `Max-Age=${maxAgeSeconds}`,
+  ];
+
+  if (shouldUseSecureCookie()) {
+    parts.push('Secure');
+  }
+
+  return parts.join('; ');
+}
 
 function getSendOptions(res: Response): SendMessageOptions {
   return {
@@ -67,10 +88,15 @@ router.post('/auth/login', loginLimiter, (req: Request, res: Response): void => 
   }
 
   res.locals.userId = credentials.username;
+  res.setHeader('Set-Cookie', buildDashboardCookie(result.token || '', COOKIE_MAX_AGE_SECONDS));
   res.json({
-    success: true,
-    token: result.token
+    success: true
   });
+});
+
+router.post('/auth/logout', (req: Request, res: Response): void => {
+  res.setHeader('Set-Cookie', buildDashboardCookie('', 0));
+  res.json({ success: true });
 });
 
 /**

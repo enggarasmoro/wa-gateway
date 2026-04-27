@@ -1,6 +1,7 @@
 import 'dotenv/config';
 import express, { Application, Request, Response, NextFunction } from 'express';
 import helmet from 'helmet';
+import rateLimit from 'express-rate-limit';
 import { Server } from 'http';
 import path from 'path';
 import { randomUUID } from 'crypto';
@@ -13,23 +14,41 @@ import {
   logOperationFinish,
   logOperationStart,
 } from './utils/logger.util';
+import { readIntegerEnv } from './utils/env.util';
 
 const app: Application = express();
-const PORT = parseInt(process.env.PORT || '3001', 10);
+const PORT = readIntegerEnv('PORT', 3001, { min: 1, max: 65535 });
 const HOST = process.env.HOST || '0.0.0.0';
 let server: Server | null = null;
 let isShuttingDown = false;
 
-// Trust proxy - required when behind reverse proxy (Traefik)
-// for correct IP detection in rate limiting
-app.set('trust proxy', 1);
+function getTrustProxySetting(): boolean | number | string {
+  const rawValue = process.env.TRUST_PROXY?.trim();
+
+  if (!rawValue) {
+    return false;
+  }
+
+  if (rawValue === 'true') {
+    return true;
+  }
+
+  if (rawValue === 'false') {
+    return false;
+  }
+
+  const numericValue = Number(rawValue);
+  return Number.isInteger(numericValue) && numericValue >= 0 ? numericValue : rawValue;
+}
+
+app.set('trust proxy', getTrustProxySetting());
 
 // Security headers
 app.use(helmet({
   contentSecurityPolicy: {
     directives: {
       defaultSrc: ["'self'"],
-      scriptSrc: ["'self'", "'unsafe-inline'"],
+      scriptSrc: ["'self'"],
       styleSrc: ["'self'", "'unsafe-inline'"],
       imgSrc: ["'self'", "data:", "blob:"],
     },
@@ -37,8 +56,20 @@ app.use(helmet({
 }));
 
 // Middleware
-app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
+app.use(express.json({ limit: '64kb' }));
+app.use(express.urlencoded({ extended: true, limit: '64kb' }));
+
+const apiSendLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: readIntegerEnv('API_SEND_RATE_LIMIT_PER_MINUTE', 30, { min: 1, max: 10000 }),
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: {
+    success: false,
+    status: 'rate_limited',
+    message: 'Too many send requests. Try again later.',
+  },
+});
 
 // Request logging middleware
 app.use((req: Request, res: Response, next: NextFunction) => {
@@ -75,7 +106,7 @@ app.use(express.static(path.join(__dirname, '../public')));
 app.use('/api', dashboardRoutes);
 
 // WA API routes (uses API Key auth)
-app.use('/api', apiKeyAuth, messageRoutes);
+app.use('/api', apiKeyAuth, apiSendLimiter, messageRoutes);
 
 // Serve dashboard at root
 app.get('/', (req: Request, res: Response) => {
@@ -126,11 +157,6 @@ async function startServer() {
   console.log('');
 
   try {
-    // Initialize WhatsApp connection
-    console.log('📱 Initializing WhatsApp connection...');
-    await whatsappService.initialize();
-
-    // Start Express server
     server = app.listen(PORT, HOST, () => {
       console.log('');
       console.log('='.repeat(50));
@@ -143,6 +169,11 @@ async function startServer() {
       console.log(`  POST http://${HOST}:${PORT}/api/broadcast`);
       console.log(`  GET  http://${HOST}:${PORT}/health`);
       console.log('');
+    });
+
+    console.log('📱 Initializing WhatsApp connection...');
+    whatsappService.initialize().catch((error) => {
+      console.error('Failed to initialize WhatsApp connection:', error);
     });
   } catch (error) {
     console.error('Failed to start server:', error);
@@ -181,6 +212,24 @@ process.on('SIGINT', () => {
 
 process.on('SIGTERM', () => {
   void shutdown('SIGTERM');
+});
+
+process.on('unhandledRejection', (reason: unknown) => {
+  if (whatsappService.handleRuntimeError(reason, 'unhandledRejection')) {
+    return;
+  }
+
+  console.error('Unhandled promise rejection:', reason);
+  void shutdown('unhandledRejection');
+});
+
+process.on('uncaughtException', (error: Error) => {
+  if (whatsappService.handleRuntimeError(error, 'uncaughtException')) {
+    return;
+  }
+
+  console.error('Uncaught exception:', error);
+  void shutdown('uncaughtException');
 });
 
 // Start the server

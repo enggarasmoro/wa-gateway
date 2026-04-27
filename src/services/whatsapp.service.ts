@@ -9,7 +9,12 @@ import {
   logOperationFinish,
   logOperationStart,
 } from '../utils/logger.util';
-import { shouldReconnectAfterDisconnect } from './whatsapp-lifecycle.util';
+import { readBooleanEnv, readIntegerEnv } from '../utils/env.util';
+import {
+  getErrorMessage,
+  isTransientWhatsAppInjectionError,
+  shouldReconnectAfterDisconnect,
+} from './whatsapp-lifecycle.util';
 
 // Message log entry
 interface MessageLog {
@@ -48,13 +53,18 @@ class WhatsAppService {
   // Anti-ban features
   private dailyMessageCount: number = 0;
   private lastResetDate: string = new Date().toDateString();
-  private readonly DAILY_MESSAGE_LIMIT = parseInt(process.env.DAILY_MESSAGE_LIMIT || '500', 10);
+  private readonly DAILY_MESSAGE_LIMIT = readIntegerEnv('DAILY_MESSAGE_LIMIT', 500, { min: 1, max: 100000 });
   private readonly TYPING_DELAY_MIN = 1000; // 1 second
   private readonly TYPING_DELAY_MAX = 3000; // 3 seconds
-  private readonly REINITIALIZE_TIMEOUT_MS = parseInt(process.env.REINITIALIZE_TIMEOUT_MS || '60000', 10);
+  private readonly INITIALIZE_RETRIES = readIntegerEnv('WHATSAPP_INITIALIZE_RETRIES', 2, { min: 0, max: 20 });
+  private readonly INITIALIZE_RETRY_DELAY_MS = readIntegerEnv('WHATSAPP_INITIALIZE_RETRY_DELAY_MS', 5000, { min: 0, max: 300000 });
+  private readonly AUTH_TIMEOUT_MS = readIntegerEnv('WHATSAPP_AUTH_TIMEOUT_MS', 120000, { min: 1000, max: 600000 });
+  private readonly PUPPETEER_PROTOCOL_TIMEOUT_MS = readIntegerEnv('PUPPETEER_PROTOCOL_TIMEOUT_MS', 180000, { min: 1000, max: 600000 });
+  private readonly CHROME_NO_SANDBOX = readBooleanEnv('CHROME_NO_SANDBOX', false);
+  private readonly LOG_MESSAGE_CONTENT = readBooleanEnv('LOG_MESSAGE_CONTENT', false);
 
   constructor() {
-    this.messageDelay = parseInt(process.env.MESSAGE_DELAY_MS || '1000', 10);
+    this.messageDelay = readIntegerEnv('MESSAGE_DELAY_MS', 1000, { min: 0, max: 600000 });
     this.createClient();
   }
 
@@ -72,11 +82,12 @@ class WhatsAppService {
         dataPath: authFolder,
         clientId: 'wa-gateway',
       }),
+      authTimeoutMs: this.AUTH_TIMEOUT_MS,
       puppeteer: {
         headless: true,
+        protocolTimeout: this.PUPPETEER_PROTOCOL_TIMEOUT_MS,
         args: [
-          '--no-sandbox',
-          '--disable-setuid-sandbox',
+          ...(this.CHROME_NO_SANDBOX ? ['--no-sandbox', '--disable-setuid-sandbox'] : []),
           '--disable-dev-shm-usage',
           '--disable-accelerated-2d-canvas',
           '--no-first-run',
@@ -235,38 +246,56 @@ class WhatsAppService {
       return;
     }
 
-    const generation = this.clientGeneration;
     this.clearReconnectTimer();
     this.isInitializing = true;
     this.waState = 'INITIALIZING';
-    
-    // Clean up stale lock files
-    const fs = await import('fs');
-    const authFolder = process.env.AUTH_FOLDER || './auth';
-    const lockFile = `${authFolder}/session-wa-gateway/SingletonLock`;
-    
+
     try {
-      if (fs.existsSync(lockFile)) {
-        console.log('🧹 Removing stale lock file...');
-        fs.unlinkSync(lockFile);
+      for (let attempt = 1; attempt <= this.INITIALIZE_RETRIES + 1; attempt++) {
+        const generation = this.clientGeneration;
+
+        await this.removeStaleAuthLock();
+
+        try {
+          await this.client.initialize();
+          return;
+        } catch (error) {
+          const message = getErrorMessage(error);
+
+          if (this.isReady && isTransientWhatsAppInjectionError(error)) {
+            console.warn(`⚠️ WhatsApp initialization reported a transient injection error after ready: ${message}`);
+            this.connectionState.lastError = message;
+            return;
+          }
+
+          if (!this.isActiveClient(generation)) {
+            console.warn('⚠️ Ignoring initialization failure from a stale WhatsApp client');
+            return;
+          }
+
+          this.connectionState.lastError = message;
+
+          if (attempt <= this.INITIALIZE_RETRIES && isTransientWhatsAppInjectionError(error)) {
+            console.warn(
+              `⚠️ WhatsApp initialization attempt ${attempt} failed with a transient Puppeteer error: ${message}`
+            );
+            await this.replaceFailedClient(`initialize retry ${attempt}`);
+            await this.delay(this.INITIALIZE_RETRY_DELAY_MS);
+            continue;
+          }
+
+          this.waState = 'ERROR';
+          console.error('❌ Failed to initialize:', error);
+          await this.replaceFailedClient('terminal initialize failure');
+          this.waState = 'ERROR';
+          if (!this.isLoggingOut && !this.isShuttingDown) {
+            this.scheduleReconnect(this.clientGeneration);
+          }
+          throw error;
+        }
       }
-    } catch (error) {
-      console.warn('⚠️ Could not remove stale lock file:', (error as Error).message);
-    }
-    
-    try {
-      await this.client.initialize();
-    } catch (error) {
-      console.error('❌ Failed to initialize:', error);
-      if (this.isActiveClient(generation)) {
-        this.waState = 'ERROR';
-        this.connectionState.lastError = (error as Error).message;
-      }
-      throw error;
     } finally {
-      if (this.isActiveClient(generation)) {
-        this.isInitializing = false;
-      }
+      this.isInitializing = false;
     }
   }
 
@@ -297,8 +326,8 @@ class WhatsAppService {
 
       this.addMessageLog({
         timestamp: new Date(),
-        target,
-        message: message.substring(0, 100),
+        target: this.maskTarget(target),
+        message: this.getLoggedMessagePreview(message),
         success: false,
         error: messageText,
       });
@@ -395,8 +424,8 @@ class WhatsAppService {
       // Log message
       this.addMessageLog({
         timestamp: new Date(),
-        target: formattedNumber,
-        message: message.substring(0, 100),
+        target: this.maskTarget(formattedNumber),
+        message: this.getLoggedMessagePreview(message),
         success: true,
         id: result.id.id,
       });
@@ -421,8 +450,8 @@ class WhatsAppService {
       // Log error
       this.addMessageLog({
         timestamp: new Date(),
-        target: formattedNumber,
-        message: message.substring(0, 100),
+        target: this.maskTarget(formattedNumber),
+        message: this.getLoggedMessagePreview(message),
         success: false,
         error: (error as Error).message,
       });
@@ -649,6 +678,10 @@ class WhatsAppService {
     return `****${digits.slice(-4)}`;
   }
 
+  private getLoggedMessagePreview(message: string): string {
+    return this.LOG_MESSAGE_CONTENT ? message.substring(0, 100) : '[redacted]';
+  }
+
   private isActiveClient(generation: number): boolean {
     return generation === this.clientGeneration;
   }
@@ -658,6 +691,38 @@ class WhatsAppService {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = null;
     }
+  }
+
+  private async removeStaleAuthLock(): Promise<void> {
+    const fs = await import('fs');
+    const authFolder = process.env.AUTH_FOLDER || './auth';
+    const lockFile = `${authFolder}/session-wa-gateway/SingletonLock`;
+
+    try {
+      if (fs.existsSync(lockFile)) {
+        console.log('🧹 Removing stale lock file...');
+        fs.unlinkSync(lockFile);
+      }
+    } catch (error) {
+      console.warn('⚠️ Could not remove stale lock file:', getErrorMessage(error));
+    }
+  }
+
+  private async replaceFailedClient(reason: string): Promise<void> {
+    const failedClient = this.client;
+    this.clientGeneration++;
+
+    failedClient.removeAllListeners();
+
+    try {
+      await failedClient.destroy();
+      console.log(`🗑️ Destroyed failed WhatsApp client after ${reason}`);
+    } catch (error) {
+      console.warn(`⚠️ Failed to destroy WhatsApp client after ${reason}: ${getErrorMessage(error)}`);
+    }
+
+    this.resetConnectionState('RETRYING_INITIALIZE');
+    this.createClient();
   }
 
   private scheduleReconnect(generation: number): void {
@@ -674,6 +739,9 @@ class WhatsAppService {
 
       this.initialize().catch((err) => {
         console.error('❌ Reconnection failed:', err);
+        if (!this.isLoggingOut && !this.isShuttingDown) {
+          this.scheduleReconnect(this.clientGeneration);
+        }
       });
     }, 10000);
   }
@@ -685,6 +753,22 @@ class WhatsAppService {
     this.connectionState.qrDisplayed = false;
     this.waState = state;
     this.qrCodeBase64 = null;
+  }
+
+  handleRuntimeError(error: unknown, source: string): boolean {
+    if (!isTransientWhatsAppInjectionError(error)) {
+      return false;
+    }
+
+    const message = getErrorMessage(error);
+    this.connectionState.lastError = message;
+    console.warn(`⚠️ Ignored transient WhatsApp runtime error from ${source}: ${message}`);
+
+    if (!this.isReady && !this.isInitializing && !this.isLoggingOut && !this.isShuttingDown) {
+      this.scheduleReconnect(this.clientGeneration);
+    }
+
+    return true;
   }
 
   /**
@@ -746,24 +830,10 @@ class WhatsAppService {
       this.createClient();
 
       try {
-        await this.withTimeout(
-          this.initialize(),
-          this.REINITIALIZE_TIMEOUT_MS,
-          'Timed out while preparing a new WhatsApp QR session'
-        );
+        await this.initialize();
         console.log('✅ Ready for new QR scan');
       } catch (error) {
         const message = error instanceof Error ? error.message : 'Failed to reinitialize WhatsApp client';
-        const failedClient = this.client;
-        this.clientGeneration++;
-        this.isInitializing = false;
-        failedClient.removeAllListeners();
-        try {
-          await failedClient.destroy();
-        } catch (destroyError) {
-          console.warn('⚠️ Failed to clean up timed-out WhatsApp client:', (destroyError as Error).message);
-        }
-        this.createClient();
         this.connectionState.lastError = message;
         this.waState = 'REINITIALIZE_FAILED';
         console.error('❌ Failed to reinitialize:', error);
@@ -777,23 +847,6 @@ class WhatsAppService {
       };
     } finally {
       this.isLoggingOut = false;
-    }
-  }
-
-  private async withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: string): Promise<T> {
-    let timeout: NodeJS.Timeout | null = null;
-
-    try {
-      return await Promise.race([
-        promise,
-        new Promise<never>((_, reject) => {
-          timeout = setTimeout(() => reject(new Error(message)), timeoutMs);
-        }),
-      ]);
-    } finally {
-      if (timeout) {
-        clearTimeout(timeout);
-      }
     }
   }
 

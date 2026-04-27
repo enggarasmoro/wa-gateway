@@ -50,9 +50,8 @@ WORKDIR /app
 # Set Puppeteer cache directory BEFORE installation
 ENV PUPPETEER_CACHE_DIR=/app/.cache/puppeteer
 
-# Create directories with proper permissions
-RUN mkdir -p /app/.cache/puppeteer /app/auth \
-    && chmod -R 777 /app/.cache /app/auth
+# Create directories; final ownership/permissions are applied after user creation.
+RUN mkdir -p /app/.cache/puppeteer /app/auth
 
 # Copy package files
 COPY package*.json ./
@@ -76,7 +75,8 @@ COPY public/ ./public/
 RUN groupadd -r pptruser && useradd -r -g pptruser -G audio,video pptruser \
     && mkdir -p /home/pptruser \
     && chown -R pptruser:pptruser /home/pptruser \
-    && chown -R pptruser:pptruser /app
+    && chown -R pptruser:pptruser /app \
+    && chmod 700 /app/.cache /app/.cache/puppeteer /app/auth
 
 USER pptruser
 

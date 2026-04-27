@@ -1,5 +1,10 @@
 import { Request, Response, NextFunction } from 'express';
-import { authService, DashboardTokenPayload } from '../services/auth.service';
+import {
+  authService,
+  DASHBOARD_TOKEN_COOKIE,
+  DashboardTokenPayload,
+  getCookieValue,
+} from '../services/auth.service';
 
 interface AuthenticatedDashboardRequest extends Request {
   user?: DashboardTokenPayload;
@@ -9,10 +14,14 @@ interface AuthenticatedDashboardRequest extends Request {
  * Dashboard JWT Authentication Middleware
  */
 export function dashboardAuth(req: Request, res: Response, next: NextFunction): void {
-  // Get token from Authorization header
   const authHeader = req.headers.authorization;
+  const bearerToken = authHeader?.startsWith('Bearer ')
+    ? authHeader.substring(7)
+    : undefined;
+  const cookieToken = getCookieValue(req.headers.cookie, DASHBOARD_TOKEN_COOKIE);
+  const token = bearerToken || cookieToken;
   
-  if (!authHeader || !authHeader.startsWith('Bearer ')) {
+  if (!token) {
     res.status(401).json({
       success: false,
       error: 'No token provided'
@@ -20,7 +29,6 @@ export function dashboardAuth(req: Request, res: Response, next: NextFunction): 
     return;
   }
 
-  const token = authHeader.substring(7);
   const { valid, payload } = authService.verifyToken(token);
 
   if (!valid || !payload) {

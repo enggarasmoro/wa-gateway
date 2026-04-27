@@ -1,4 +1,5 @@
 import { parseTargets, PhoneNumberValidationError } from './phone.util';
+import { readIntegerEnv } from './env.util';
 
 export class RequestValidationError extends Error {
   constructor(message: string) {
@@ -23,8 +24,8 @@ export interface ValidatedLoginRequest {
   password: string;
 }
 
-const MAX_MESSAGE_LENGTH = parseInt(process.env.MAX_MESSAGE_LENGTH || '4096', 10);
-const MAX_BROADCAST_TARGETS = parseInt(process.env.MAX_BROADCAST_TARGETS || '100', 10);
+const MAX_MESSAGE_LENGTH = readIntegerEnv('MAX_MESSAGE_LENGTH', 4096, { min: 1, max: 65536 });
+const MAX_BROADCAST_TARGETS = readIntegerEnv('MAX_BROADCAST_TARGETS', 100, { min: 1, max: 1000 });
 const MAX_USERNAME_LENGTH = 128;
 const MAX_PASSWORD_LENGTH = 512;
 

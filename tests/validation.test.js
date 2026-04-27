@@ -17,6 +17,7 @@ const {
   getMessageResponsesHttpStatus,
 } = require('../dist/utils/http-status.util');
 const { loadSecurityConfig } = require('../dist/config/security.config');
+const { readBooleanEnv, readIntegerEnv } = require('../dist/utils/env.util');
 
 process.env.API_KEY = process.env.API_KEY || 'safe-api-key-for-tests';
 process.env.DASHBOARD_USERNAME = process.env.DASHBOARD_USERNAME || 'operator';
@@ -24,7 +25,12 @@ process.env.DASHBOARD_PASSWORD = process.env.DASHBOARD_PASSWORD || 'safe-dashboa
 process.env.JWT_SECRET = process.env.JWT_SECRET || 'safe-jwt-secret';
 
 const { isApiKeyMatch } = require('../dist/middlewares/auth.middleware');
-const { shouldReconnectAfterDisconnect } = require('../dist/services/whatsapp-lifecycle.util');
+const { DASHBOARD_TOKEN_COOKIE, getCookieValue } = require('../dist/services/auth.service');
+const {
+  getErrorMessage,
+  isTransientWhatsAppInjectionError,
+  shouldReconnectAfterDisconnect,
+} = require('../dist/services/whatsapp-lifecycle.util');
 
 test('formatPhoneNumber normalizes Indonesian local numbers', () => {
   assert.equal(formatPhoneNumber('0812-3456-7890'), '6281234567890');
@@ -215,11 +221,79 @@ test('isApiKeyMatch only accepts exact single-string matches', () => {
   assert.equal(isApiKeyMatch(['safe-api-key-for-tests'], 'safe-api-key-for-tests'), false);
 });
 
+test('getCookieValue reads encoded dashboard token cookies', () => {
+  const token = 'header.payload.signature';
+  const cookieHeader = `other=value; ${DASHBOARD_TOKEN_COOKIE}=${encodeURIComponent(token)}; theme=dark`;
+
+  assert.equal(getCookieValue(cookieHeader, DASHBOARD_TOKEN_COOKIE), token);
+  assert.equal(getCookieValue(cookieHeader, 'missing'), undefined);
+});
+
+test('readIntegerEnv rejects malformed numeric safety config', () => {
+  const previous = process.env.UNSAFE_LIMIT_FOR_TEST;
+  process.env.UNSAFE_LIMIT_FOR_TEST = 'not-a-number';
+
+  try {
+    assert.throws(
+      () => readIntegerEnv('UNSAFE_LIMIT_FOR_TEST', 10, { min: 1 }),
+      /UNSAFE_LIMIT_FOR_TEST must be an integer/
+    );
+  } finally {
+    if (previous === undefined) {
+      delete process.env.UNSAFE_LIMIT_FOR_TEST;
+    } else {
+      process.env.UNSAFE_LIMIT_FOR_TEST = previous;
+    }
+  }
+});
+
+test('readBooleanEnv accepts explicit safe boolean values only', () => {
+  const previous = process.env.BOOLEAN_FOR_TEST;
+  process.env.BOOLEAN_FOR_TEST = 'true';
+  assert.equal(readBooleanEnv('BOOLEAN_FOR_TEST', false), true);
+  process.env.BOOLEAN_FOR_TEST = 'no';
+  assert.equal(readBooleanEnv('BOOLEAN_FOR_TEST', true), false);
+  process.env.BOOLEAN_FOR_TEST = 'maybe';
+
+  try {
+    assert.throws(
+      () => readBooleanEnv('BOOLEAN_FOR_TEST', false),
+      /BOOLEAN_FOR_TEST must be a boolean/
+    );
+  } finally {
+    if (previous === undefined) {
+      delete process.env.BOOLEAN_FOR_TEST;
+    } else {
+      process.env.BOOLEAN_FOR_TEST = previous;
+    }
+  }
+});
+
 test('shouldReconnectAfterDisconnect skips intentional lifecycle disconnects', () => {
   assert.equal(shouldReconnectAfterDisconnect('NAVIGATION', false, false), true);
   assert.equal(shouldReconnectAfterDisconnect('LOGOUT', false, false), false);
   assert.equal(shouldReconnectAfterDisconnect('NAVIGATION', true, false), false);
   assert.equal(shouldReconnectAfterDisconnect('NAVIGATION', false, true), false);
+});
+
+test('getErrorMessage normalizes Error and string values', () => {
+  assert.equal(getErrorMessage(new Error('boom')), 'boom');
+  assert.equal(getErrorMessage('auth timeout'), 'auth timeout');
+  assert.equal(getErrorMessage({ code: 'UNKNOWN' }), 'Unknown error');
+});
+
+test('isTransientWhatsAppInjectionError detects known Puppeteer injection failures', () => {
+  assert.equal(
+    isTransientWhatsAppInjectionError(new Error('Execution context was destroyed, most likely because of a navigation.')),
+    true
+  );
+  assert.equal(
+    isTransientWhatsAppInjectionError(new Error('ProtocolError: Runtime.callFunctionOn timed out.')),
+    true
+  );
+  assert.equal(isTransientWhatsAppInjectionError('auth timeout'), true);
+  assert.equal(isTransientWhatsAppInjectionError(new Error('ProtocolError: Target closed')), false);
+  assert.equal(isTransientWhatsAppInjectionError(new Error('Invalid API key')), false);
 });
 
 test('getMessageResponseHttpStatus maps expected send failures', () => {
