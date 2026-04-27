@@ -21,9 +21,10 @@ docker build -t wa-gateway .
 docker run -d \
   --name wa-gateway \
   -p 3001:3001 \
-  -e API_KEY=your-api-key \
-  -e DASHBOARD_USERNAME=admin \
-  -e DASHBOARD_PASSWORD=your-password \
+  -e API_KEY=replace-with-a-long-random-api-key \
+  -e DASHBOARD_USERNAME=replace-with-dashboard-username \
+  -e DASHBOARD_PASSWORD=replace-with-a-long-random-dashboard-password \
+  -e JWT_SECRET=replace-with-a-different-long-random-jwt-secret \
   -v wa-auth:/app/auth \
   wa-gateway
 ```
@@ -34,7 +35,7 @@ docker run -d \
 http://localhost:3001/
 ```
 
-Login with `DASHBOARD_USERNAME` and `DASHBOARD_PASSWORD`.
+Login with `DASHBOARD_USERNAME` and `DASHBOARD_PASSWORD`. The service fails at startup if `API_KEY`, dashboard credentials, or `JWT_SECRET` are missing or still use insecure defaults.
 
 ## 📡 API Endpoints
 
@@ -60,12 +61,14 @@ Login with `DASHBOARD_USERNAME` and `DASHBOARD_PASSWORD`.
 | Variable             | Default | Description                 |
 | -------------------- | ------- | --------------------------- |
 | `PORT`               | 3001    | Server port                 |
-| `API_KEY`            | -       | API key for external access |
-| `DASHBOARD_USERNAME` | admin   | Dashboard login             |
-| `DASHBOARD_PASSWORD` | -       | Dashboard password          |
-| `JWT_SECRET`         | -       | Secret for JWT tokens       |
+| `API_KEY`            | required | API key for external access |
+| `DASHBOARD_USERNAME` | required | Dashboard login             |
+| `DASHBOARD_PASSWORD` | required | Dashboard password          |
+| `JWT_SECRET`         | required | Secret for JWT tokens       |
+| `DASHBOARD_BCRYPT_ROUNDS` | 12 | Dashboard password hash cost, minimum 12 |
 | `MESSAGE_DELAY_MS`   | 1000    | Delay between broadcasts    |
 | `AUTH_FOLDER`        | ./auth  | Session storage             |
+| `REINITIALIZE_TIMEOUT_MS` | 60000 | Max wait for logout QR session setup |
 
 ## 📁 Project Structure
 

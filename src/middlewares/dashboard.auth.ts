@@ -1,5 +1,9 @@
 import { Request, Response, NextFunction } from 'express';
-import { authService } from '../services/auth.service';
+import { authService, DashboardTokenPayload } from '../services/auth.service';
+
+interface AuthenticatedDashboardRequest extends Request {
+  user?: DashboardTokenPayload;
+}
 
 /**
  * Dashboard JWT Authentication Middleware
@@ -19,7 +23,7 @@ export function dashboardAuth(req: Request, res: Response, next: NextFunction): 
   const token = authHeader.substring(7);
   const { valid, payload } = authService.verifyToken(token);
 
-  if (!valid) {
+  if (!valid || !payload) {
     res.status(401).json({
       success: false,
       error: 'Invalid or expired token'
@@ -28,6 +32,7 @@ export function dashboardAuth(req: Request, res: Response, next: NextFunction): 
   }
 
   // Attach user info to request
-  (req as any).user = payload;
+  (req as AuthenticatedDashboardRequest).user = payload;
+  res.locals.userId = payload.username;
   next();
 }

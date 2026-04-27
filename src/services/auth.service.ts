@@ -1,12 +1,20 @@
 import * as bcrypt from 'bcryptjs';
 import * as jwt from 'jsonwebtoken';
+import { JwtPayload } from 'jsonwebtoken';
+import { loadSecurityConfig } from '../config/security.config';
 
-const JWT_SECRET = process.env.JWT_SECRET || process.env.API_KEY || 'default-secret-change-me';
+const securityConfig = loadSecurityConfig();
+const JWT_SECRET = securityConfig.jwtSecret;
 const JWT_EXPIRY = '1h';
 
-// Default credentials (should be changed via env)
-const DASHBOARD_USERNAME = process.env.DASHBOARD_USERNAME || 'admin';
-const DASHBOARD_PASSWORD = process.env.DASHBOARD_PASSWORD || process.env.API_KEY || 'admin';
+const DASHBOARD_USERNAME = securityConfig.dashboardUsername;
+const DASHBOARD_PASSWORD = securityConfig.dashboardPassword;
+const BCRYPT_ROUNDS = securityConfig.bcryptRounds;
+
+export interface DashboardTokenPayload extends JwtPayload {
+  username: string;
+  role: 'admin';
+}
 
 // Login attempt tracking for rate limiting
 interface LoginAttempt {
@@ -27,7 +35,7 @@ class AuthService {
 
   constructor() {
     // Hash password on startup
-    this.passwordHash = bcrypt.hashSync(DASHBOARD_PASSWORD, 10);
+    this.passwordHash = bcrypt.hashSync(DASHBOARD_PASSWORD, BCRYPT_ROUNDS);
   }
 
   /**
@@ -119,10 +127,20 @@ class AuthService {
   /**
    * Verify JWT token
    */
-  verifyToken(token: string): { valid: boolean; payload?: any } {
+  verifyToken(token: string): { valid: boolean; payload?: DashboardTokenPayload } {
     try {
       const payload = jwt.verify(token, JWT_SECRET);
-      return { valid: true, payload };
+
+      if (
+        !payload ||
+        typeof payload !== 'object' ||
+        typeof payload.username !== 'string' ||
+        payload.role !== 'admin'
+      ) {
+        return { valid: false };
+      }
+
+      return { valid: true, payload: payload as DashboardTokenPayload };
     } catch (error) {
       return { valid: false };
     }

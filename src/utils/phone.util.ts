@@ -1,3 +1,10 @@
+export class PhoneNumberValidationError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'PhoneNumberValidationError';
+  }
+}
+
 /**
  * Format phone number to WhatsApp format (with country code)
  * @param phoneNumber - Phone number to format
@@ -8,13 +15,16 @@ export function formatPhoneNumber(
   phoneNumber: string,
   defaultCountryCode: string = '62'
 ): string {
+  if (typeof phoneNumber !== 'string') {
+    throw new PhoneNumberValidationError('Phone number must be a string');
+  }
+
   // Remove all non-numeric characters
   let cleaned = phoneNumber.replace(/[^0-9]/g, '');
 
   // Validate length
   if (cleaned.length < 10 || cleaned.length > 15) {
-    console.warn(`Invalid phone number length: ${phoneNumber}`);
-    return phoneNumber;
+    throw new PhoneNumberValidationError('Phone number must contain 10 to 15 digits');
   }
 
   // Format to international format
@@ -45,9 +55,19 @@ export function toWhatsAppJid(phoneNumber: string): string {
  * @returns Array of formatted phone numbers
  */
 export function parseTargets(targets: string): string[] {
-  return targets
+  if (typeof targets !== 'string') {
+    throw new PhoneNumberValidationError('Targets must be a comma-separated string');
+  }
+
+  const parsedTargets = targets
     .split(',')
     .map((t) => t.trim())
     .filter((t) => t.length > 0)
     .map((t) => formatPhoneNumber(t));
+
+  if (parsedTargets.length === 0) {
+    throw new PhoneNumberValidationError('At least one target is required');
+  }
+
+  return parsedTargets;
 }

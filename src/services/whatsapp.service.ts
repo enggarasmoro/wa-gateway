@@ -1,8 +1,15 @@
 import { Client, LocalAuth, Message, WAState } from 'whatsapp-web.js';
 import * as qrcode from 'qrcode-terminal';
 import * as QRCode from 'qrcode';
-import { ConnectionState, MessageResponse } from '../types';
-import { formatPhoneNumber } from '../utils/phone.util';
+import { randomUUID } from 'crypto';
+import { ConnectionState, MessageResponse, SendMessageOptions, WhatsAppLogoutResult } from '../types';
+import { formatPhoneNumber, PhoneNumberValidationError } from '../utils/phone.util';
+import {
+  createOperationContext,
+  logOperationFinish,
+  logOperationStart,
+} from '../utils/logger.util';
+import { shouldReconnectAfterDisconnect } from './whatsapp-lifecycle.util';
 
 // Message log entry
 interface MessageLog {
@@ -31,6 +38,12 @@ class WhatsAppService {
   private qrCodeBase64: string | null = null;
   private messageLogs: MessageLog[] = [];
   private readonly MAX_LOGS = 100;
+  private lastReadinessLogAt: number = 0;
+  private clientGeneration: number = 0;
+  private reconnectTimer: NodeJS.Timeout | null = null;
+  private isInitializing: boolean = false;
+  private isLoggingOut: boolean = false;
+  private isShuttingDown: boolean = false;
 
   // Anti-ban features
   private dailyMessageCount: number = 0;
@@ -38,6 +51,7 @@ class WhatsAppService {
   private readonly DAILY_MESSAGE_LIMIT = parseInt(process.env.DAILY_MESSAGE_LIMIT || '500', 10);
   private readonly TYPING_DELAY_MIN = 1000; // 1 second
   private readonly TYPING_DELAY_MAX = 3000; // 3 seconds
+  private readonly REINITIALIZE_TIMEOUT_MS = parseInt(process.env.REINITIALIZE_TIMEOUT_MS || '60000', 10);
 
   constructor() {
     this.messageDelay = parseInt(process.env.MESSAGE_DELAY_MS || '1000', 10);
@@ -49,10 +63,11 @@ class WhatsAppService {
    */
   private createClient(): void {
     const authFolder = process.env.AUTH_FOLDER || './auth';
+    const generation = ++this.clientGeneration;
 
     // Initialize client with LocalAuth for session persistence
     // Ref: https://docs.wwebjs.dev/LocalAuth.html
-    this.client = new Client({
+    const client = new Client({
       authStrategy: new LocalAuth({
         dataPath: authFolder,
         clientId: 'wa-gateway',
@@ -81,16 +96,19 @@ class WhatsAppService {
       },
     });
 
-    this.setupEventHandlers();
+    this.client = client;
+    this.setupEventHandlers(client, generation);
   }
 
   /**
    * Setup all event handlers
    * Ref: https://docs.wwebjs.dev/global.html#Events
    */
-  private setupEventHandlers(): void {
+  private setupEventHandlers(client: Client, generation: number): void {
     // QR Code received - User needs to scan
-    this.client.on('qr', async (qr: string) => {
+    client.on('qr', async (qr: string) => {
+      if (!this.isActiveClient(generation)) return;
+
       console.log('\n');
       console.log('═'.repeat(50));
       console.log('📱 SCAN QR CODE WITH WHATSAPP');
@@ -115,36 +133,31 @@ class WhatsAppService {
     });
 
     // Loading screen progress
-    this.client.on('loading_screen', (percent: number, message: string) => {
+    client.on('loading_screen', (percent: number, message: string) => {
+      if (!this.isActiveClient(generation)) return;
+
       console.log(`⏳ Loading: ${percent}% - ${message}`);
     });
 
     // Authentication successful (after QR scan)
-    this.client.on('authenticated', () => {
+    client.on('authenticated', () => {
+      if (!this.isActiveClient(generation)) return;
+
       console.log('🔐 Authentication successful!');
       this.waState = 'AUTHENTICATED';
     });
 
     // Client is ready to send/receive messages
-    this.client.on('ready', () => {
-      console.log('✅ WhatsApp client is ready!');
-      this.connectionState.isConnected = true;
-      this.connectionState.qrDisplayed = false;
-      this.isReady = true;
-      this.waState = 'CONNECTED';
-      this.qrCodeBase64 = null; // Clear QR code after successful connection
+    client.on('ready', () => {
+      if (!this.isActiveClient(generation)) return;
 
-      // Get connected phone info
-      const info = this.client.info;
-      if (info) {
-        this.connectionState.phoneNumber = info.wid.user;
-        console.log(`📱 Connected as: +${this.connectionState.phoneNumber}`);
-        console.log(`� Name: ${info.pushname || 'Unknown'}`);
-      }
+      this.markClientReady('ready event');
     });
 
     // Authentication failure
-    this.client.on('auth_failure', (msg: string) => {
+    client.on('auth_failure', (msg: string) => {
+      if (!this.isActiveClient(generation)) return;
+
       console.error('❌ Authentication failed:', msg);
       console.error('💡 Try deleting the auth folder and restarting');
       this.connectionState.isConnected = false;
@@ -154,43 +167,57 @@ class WhatsAppService {
 
     // State changed (CONFLICT, CONNECTED, DEPRECATED, OPENING, PAIRING, PROXYBLOCK,
     // SMB_TOS_BLOCK, TIMEOUT, TOS_BLOCK, UNLAUNCHED, UNPAIRED, UNPAIRED_IDLE)
-    this.client.on('change_state', (state: WAState) => {
+    client.on('change_state', (state: WAState) => {
+      if (!this.isActiveClient(generation)) return;
+
       console.log(`📊 State changed: ${state}`);
       this.waState = state;
+
+      if (state !== 'CONNECTED') {
+        this.connectionState.isConnected = false;
+        this.isReady = false;
+      }
     });
 
     // Disconnected from WhatsApp
-    this.client.on('disconnected', (reason: string) => {
+    client.on('disconnected', (reason: string) => {
+      if (!this.isActiveClient(generation)) return;
+
       console.log('📴 Disconnected:', reason);
       this.connectionState.isConnected = false;
       this.isReady = false;
       this.waState = 'DISCONNECTED';
 
-      // Attempt to reconnect
-      console.log('🔄 Attempting to reconnect in 10 seconds...');
-      setTimeout(() => {
-        this.initialize().catch((err) => {
-          console.error('❌ Reconnection failed:', err);
-        });
-      }, 10000);
+      if (!shouldReconnectAfterDisconnect(reason, this.isLoggingOut, this.isShuttingDown)) {
+        console.log('ℹ️ Reconnect skipped for intentional disconnect');
+        return;
+      }
+
+      this.scheduleReconnect(generation);
     });
 
     // Message received (for logging/debugging)
-    this.client.on('message', (msg: Message) => {
+    client.on('message', (msg: Message) => {
+      if (!this.isActiveClient(generation)) return;
+
       if (process.env.LOG_LEVEL === 'debug') {
-        console.log(`📩 Message from ${msg.from}: ${msg.body.substring(0, 50)}...`);
+        console.log(`📩 Message received from ${this.maskTarget(msg.from)}`);
       }
     });
 
     // Message sent by us
-    this.client.on('message_create', (msg: Message) => {
+    client.on('message_create', (msg: Message) => {
+      if (!this.isActiveClient(generation)) return;
+
       if (msg.fromMe && process.env.LOG_LEVEL === 'debug') {
-        console.log(`📤 Message sent to ${msg.to}: ${msg.body.substring(0, 50)}...`);
+        console.log(`📤 Message sent to ${this.maskTarget(msg.to)}`);
       }
     });
 
     // Message acknowledgement (delivered, read, etc)
-    this.client.on('message_ack', (msg: Message, ack: number) => {
+    client.on('message_ack', (msg: Message, ack: number) => {
+      if (!this.isActiveClient(generation)) return;
+
       if (process.env.LOG_LEVEL === 'debug') {
         const ackStatus = ['ERROR', 'PENDING', 'SERVER', 'DEVICE', 'READ', 'PLAYED'];
         console.log(`✓ Message ${msg.id.id}: ${ackStatus[ack] || ack}`);
@@ -203,11 +230,14 @@ class WhatsAppService {
    */
   async initialize(): Promise<void> {
     // Prevent double initialization
-    if (this.waState === 'INITIALIZING' || this.isReady) {
+    if (this.isInitializing || this.isReady || this.isShuttingDown) {
       console.log('⚠️ Already initializing or connected, skipping...');
       return;
     }
 
+    const generation = this.clientGeneration;
+    this.clearReconnectTimer();
+    this.isInitializing = true;
     this.waState = 'INITIALIZING';
     
     // Clean up stale lock files
@@ -220,33 +250,92 @@ class WhatsAppService {
         console.log('🧹 Removing stale lock file...');
         fs.unlinkSync(lockFile);
       }
-    } catch (e) {
-      // Ignore errors
+    } catch (error) {
+      console.warn('⚠️ Could not remove stale lock file:', (error as Error).message);
     }
     
     try {
       await this.client.initialize();
     } catch (error) {
       console.error('❌ Failed to initialize:', error);
-      this.waState = 'ERROR';
+      if (this.isActiveClient(generation)) {
+        this.waState = 'ERROR';
+        this.connectionState.lastError = (error as Error).message;
+      }
       throw error;
+    } finally {
+      if (this.isActiveClient(generation)) {
+        this.isInitializing = false;
+      }
     }
   }
 
   /**
    * Send a single message
    */
-  async sendMessage(target: string, message: string): Promise<MessageResponse> {
-    if (!this.isReady) {
+  async sendMessage(
+    target: string,
+    message: string,
+    options: SendMessageOptions = {}
+  ): Promise<MessageResponse> {
+    const correlationId = options.correlationId || randomUUID();
+    const context = createOperationContext('whatsapp.send_message', correlationId);
+    const targetRef = this.maskTarget(target);
+    let formattedNumber: string;
+
+    logOperationStart(context, {
+      target: targetRef,
+      userId: options.userId,
+    });
+
+    try {
+      formattedNumber = formatPhoneNumber(target);
+    } catch (error) {
+      const messageText = error instanceof PhoneNumberValidationError
+        ? error.message
+        : 'Invalid phone number';
+
+      this.addMessageLog({
+        timestamp: new Date(),
+        target,
+        message: message.substring(0, 100),
+        success: false,
+        error: messageText,
+      });
+
+      logOperationFinish(context, 'failure', {
+        target: targetRef,
+        userId: options.userId,
+        status: 'invalid_number',
+        error: messageText,
+      });
+
+      return {
+        success: false,
+        status: 'invalid_number',
+        message: messageText,
+        target,
+      };
+    }
+
+    const isReady = await this.refreshConnectionReadiness('sendMessage');
+
+    if (!isReady) {
+      logOperationFinish(context, 'failure', {
+        target: this.maskTarget(formattedNumber),
+        userId: options.userId,
+        status: 'disconnected',
+        state: this.waState,
+      });
+
       return {
         success: false,
         status: 'disconnected',
-        message: 'WhatsApp is not connected. Please scan QR code.',
+        message: this.getNotReadyMessage(),
       };
     }
 
     try {
-      const formattedNumber = formatPhoneNumber(target);
       // whatsapp-web.js format: number@c.us
       const chatId = `${formattedNumber}@c.us`;
 
@@ -261,15 +350,22 @@ class WhatsAppService {
       // Check daily limit
       if (this.dailyMessageCount >= this.DAILY_MESSAGE_LIMIT) {
         console.log(`⚠️ Daily message limit reached (${this.DAILY_MESSAGE_LIMIT})`);
+        logOperationFinish(context, 'failure', {
+          target: this.maskTarget(formattedNumber),
+          userId: options.userId,
+          status: 'rate_limited',
+          dailyMessageLimit: this.DAILY_MESSAGE_LIMIT,
+        });
+
         return {
           success: false,
-          status: 'error',
+          status: 'rate_limited',
           message: `Daily message limit reached (${this.DAILY_MESSAGE_LIMIT}). Try again tomorrow.`,
           target: formattedNumber,
         };
       }
 
-      console.log(`📤 Sending message to: +${formattedNumber}`);
+      console.log(`📤 Sending message to: ${this.maskTarget(formattedNumber)}`);
 
       // Anti-ban: Get chat and simulate typing
       try {
@@ -294,7 +390,7 @@ class WhatsAppService {
       // Increment daily counter
       this.dailyMessageCount++;
 
-      console.log(`✅ Message sent to +${formattedNumber} (ID: ${result.id.id}) [${this.dailyMessageCount}/${this.DAILY_MESSAGE_LIMIT}]`);
+      console.log(`✅ Message sent to ${this.maskTarget(formattedNumber)} (ID: ${result.id.id}) [${this.dailyMessageCount}/${this.DAILY_MESSAGE_LIMIT}]`);
 
       // Log message
       this.addMessageLog({
@@ -303,6 +399,13 @@ class WhatsAppService {
         message: message.substring(0, 100),
         success: true,
         id: result.id.id,
+      });
+
+      logOperationFinish(context, 'success', {
+        target: this.maskTarget(formattedNumber),
+        userId: options.userId,
+        status: 'sent',
+        messageId: result.id.id,
       });
 
       return {
@@ -318,17 +421,24 @@ class WhatsAppService {
       // Log error
       this.addMessageLog({
         timestamp: new Date(),
-        target: formatPhoneNumber(target),
+        target: formattedNumber,
         message: message.substring(0, 100),
         success: false,
+        error: (error as Error).message,
+      });
+
+      logOperationFinish(context, 'failure', {
+        target: this.maskTarget(formattedNumber),
+        userId: options.userId,
+        status: 'error',
         error: (error as Error).message,
       });
 
       return {
         success: false,
         status: 'error',
-        message: `Failed to send message: ${(error as Error).message}`,
-        target: formatPhoneNumber(target),
+        message: 'Failed to send message. Check gateway logs for details.',
+        target: formattedNumber,
       };
     }
   }
@@ -336,28 +446,71 @@ class WhatsAppService {
   /**
    * Send broadcast messages to multiple targets
    */
-  async sendBroadcast(targets: string[], message: string): Promise<MessageResponse[]> {
+  async sendBroadcast(
+    targets: string[],
+    message: string,
+    options: SendMessageOptions = {}
+  ): Promise<MessageResponse[]> {
+    const correlationId = options.correlationId || randomUUID();
+    const context = createOperationContext('whatsapp.send_broadcast', correlationId);
     const results: MessageResponse[] = [];
 
-    for (let i = 0; i < targets.length; i++) {
-      const target = targets[i];
-      const result = await this.sendMessage(target, message);
-      results.push(result);
+    logOperationStart(context, {
+      targetCount: targets.length,
+      userId: options.userId,
+    });
 
-      // Add delay between messages to avoid spam detection
-      if (i < targets.length - 1) {
-        await this.delay(this.messageDelay);
+    try {
+      for (let i = 0; i < targets.length; i++) {
+        const target = targets[i];
+        const result = await this.sendMessage(target, message, {
+          ...options,
+          correlationId,
+        });
+        results.push(result);
+
+        // Add delay between messages to avoid spam detection
+        if (i < targets.length - 1) {
+          await this.delay(this.messageDelay);
+        }
       }
-    }
 
-    return results;
+      const sentCount = results.filter((result) => result.success).length;
+      logOperationFinish(context, sentCount === results.length ? 'success' : 'failure', {
+        targetCount: targets.length,
+        sentCount,
+        userId: options.userId,
+      });
+
+      return results;
+    } catch (error) {
+      logOperationFinish(context, 'failure', {
+        targetCount: targets.length,
+        sentCount: results.filter((result) => result.success).length,
+        userId: options.userId,
+        error: error instanceof Error ? error.message : 'Unknown broadcast error',
+      });
+
+      throw error;
+    }
   }
 
   /**
    * Get current connection state
    */
   getConnectionState(): ConnectionState {
-    return { ...this.connectionState };
+    return {
+      ...this.connectionState,
+      isReady: this.isReady,
+    };
+  }
+
+  /**
+   * Refresh current connection state from the live WhatsApp Web client.
+   */
+  async refreshConnectionState(operation = 'status'): Promise<ConnectionState> {
+    await this.refreshConnectionReadiness(operation);
+    return this.getConnectionState();
   }
 
   /**
@@ -372,6 +525,85 @@ class WhatsAppService {
    */
   isConnected(): boolean {
     return this.isReady && this.connectionState.isConnected;
+  }
+
+  /**
+   * Mark the client as ready from either the official ready event or a live
+   * getState() check that confirms WhatsApp Web is CONNECTED.
+   */
+  private markClientReady(source: string): void {
+    if (!this.isReady) {
+      console.log(`✅ WhatsApp client is ready (${source})!`);
+    }
+
+    this.connectionState.isConnected = true;
+    this.connectionState.qrDisplayed = false;
+    this.connectionState.lastError = undefined;
+    this.isReady = true;
+    this.waState = 'CONNECTED';
+    this.qrCodeBase64 = null;
+
+    const info = this.client.info;
+    if (info) {
+      this.connectionState.phoneNumber = info.wid.user;
+      if (source === 'ready event') {
+        console.log(`📱 Connected as: +${this.connectionState.phoneNumber}`);
+        console.log(`📛 Name: ${info.pushname || 'Unknown'}`);
+      }
+    }
+  }
+
+  /**
+   * Avoid rejecting sends because a local ready flag missed an event.
+   */
+  private async refreshConnectionReadiness(operation: string): Promise<boolean> {
+    if (this.isReady && this.connectionState.isConnected) {
+      return true;
+    }
+
+    try {
+      const state = await this.client.getState();
+
+      if (state) {
+        this.waState = state;
+      }
+
+      if (state === 'CONNECTED') {
+        this.markClientReady(`live state check during ${operation}`);
+        return true;
+      }
+
+      this.connectionState.isConnected = false;
+      this.isReady = false;
+      return false;
+    } catch (error) {
+      const err = error as Error;
+      this.connectionState.lastError = err.message;
+
+      const now = Date.now();
+      if (now - this.lastReadinessLogAt > 30000) {
+        console.warn(`⚠️ Unable to refresh WhatsApp readiness during ${operation}: ${err.message}`);
+        this.lastReadinessLogAt = now;
+      }
+
+      return false;
+    }
+  }
+
+  private getNotReadyMessage(): string {
+    if (this.waState === 'AUTHENTICATED') {
+      return 'WhatsApp is authenticated but not ready yet. Wait for the ready state, then try again.';
+    }
+
+    if (this.waState === 'CONNECTED') {
+      return 'WhatsApp reports CONNECTED but the client is not ready to send yet. Try again in a few seconds.';
+    }
+
+    if (this.connectionState.qrDisplayed || this.waState === 'WAITING_FOR_QR_SCAN') {
+      return 'WhatsApp is not connected. Please scan QR code.';
+    }
+
+    return `WhatsApp is not ready to send messages. Current state: ${this.waState}.`;
   }
 
   /**
@@ -408,11 +640,61 @@ class WhatsAppService {
     return Math.floor(Math.random() * (max - min + 1)) + min;
   }
 
+  private maskTarget(target: string): string {
+    const digits = target.replace(/[^0-9]/g, '');
+    if (digits.length <= 4) {
+      return '****';
+    }
+
+    return `****${digits.slice(-4)}`;
+  }
+
+  private isActiveClient(generation: number): boolean {
+    return generation === this.clientGeneration;
+  }
+
+  private clearReconnectTimer(): void {
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
+    }
+  }
+
+  private scheduleReconnect(generation: number): void {
+    this.clearReconnectTimer();
+    console.log('🔄 Attempting to reconnect in 10 seconds...');
+
+    this.reconnectTimer = setTimeout(() => {
+      this.reconnectTimer = null;
+
+      if (!this.isActiveClient(generation) || this.isLoggingOut || this.isShuttingDown) {
+        console.log('ℹ️ Reconnect skipped because client lifecycle changed');
+        return;
+      }
+
+      this.initialize().catch((err) => {
+        console.error('❌ Reconnection failed:', err);
+      });
+    }, 10000);
+  }
+
+  private resetConnectionState(state: string): void {
+    this.isReady = false;
+    this.connectionState.isConnected = false;
+    this.connectionState.phoneNumber = undefined;
+    this.connectionState.qrDisplayed = false;
+    this.waState = state;
+    this.qrCodeBase64 = null;
+  }
+
   /**
    * Graceful shutdown
    */
   async destroy(): Promise<void> {
     console.log('🛑 Shutting down WhatsApp client...');
+    this.isShuttingDown = true;
+    this.clearReconnectTimer();
+
     if (this.client) {
       try {
         await this.client.destroy();
@@ -421,50 +703,96 @@ class WhatsAppService {
         console.error('❌ Error destroying client:', error);
       }
     }
+
+    this.resetConnectionState('SHUTDOWN');
   }
 
   /**
    * Logout and clear session, then recreate client for new QR
    */
-  async logout(): Promise<void> {
+  async logout(): Promise<WhatsAppLogoutResult> {
     console.log('🔓 Logging out...');
-    if (this.client) {
+    if (!this.client) {
+      return {
+        success: true,
+        state: this.waState,
+        message: 'WhatsApp client is already unavailable',
+      };
+    }
+
+    this.isLoggingOut = true;
+    this.clearReconnectTimer();
+    const oldClient = this.client;
+
+    try {
       try {
-        // Try to logout gracefully
-        try {
-          await this.client.logout();
-          console.log('✅ Logged out from WhatsApp');
-        } catch (logoutError) {
-          console.log('⚠️ Logout failed, will destroy client anyway');
-        }
+        await oldClient.logout();
+        console.log('✅ Logged out from WhatsApp');
+      } catch (logoutError) {
+        console.warn('⚠️ Logout failed, will destroy client anyway:', (logoutError as Error).message);
+      }
 
-        // Destroy the old client
-        try {
-          await this.client.destroy();
-          console.log('🗑️ Old client destroyed');
-        } catch (destroyError) {
-          console.log('⚠️ Destroy failed, continuing...');
-        }
+      try {
+        await oldClient.destroy();
+        console.log('🗑️ Old client destroyed');
+      } catch (destroyError) {
+        console.warn('⚠️ Destroy failed, continuing:', (destroyError as Error).message);
+      }
 
-        // Reset internal state
-        this.isReady = false;
-        this.connectionState.isConnected = false;
-        this.connectionState.phoneNumber = undefined;
-        this.waState = 'REINITIALIZING';
-        this.qrCodeBase64 = null;
-        
-        // Create new client and reinitialize in background
-        console.log('🔄 Creating new client for QR code...');
-        this.createClient();
-        
-        // Don't await - run in background so HTTP response returns immediately
-        this.initialize()
-          .then(() => console.log('✅ Ready for new QR scan'))
-          .catch(err => console.error('❌ Failed to reinitialize:', err));
-          
+      oldClient.removeAllListeners();
+      this.resetConnectionState('REINITIALIZING');
+
+      console.log('🔄 Creating new client for QR code...');
+      this.createClient();
+
+      try {
+        await this.withTimeout(
+          this.initialize(),
+          this.REINITIALIZE_TIMEOUT_MS,
+          'Timed out while preparing a new WhatsApp QR session'
+        );
+        console.log('✅ Ready for new QR scan');
       } catch (error) {
-        console.error('❌ Error during logout process:', error);
-        // Don't throw - reinitialize will continue in background
+        const message = error instanceof Error ? error.message : 'Failed to reinitialize WhatsApp client';
+        const failedClient = this.client;
+        this.clientGeneration++;
+        this.isInitializing = false;
+        failedClient.removeAllListeners();
+        try {
+          await failedClient.destroy();
+        } catch (destroyError) {
+          console.warn('⚠️ Failed to clean up timed-out WhatsApp client:', (destroyError as Error).message);
+        }
+        this.createClient();
+        this.connectionState.lastError = message;
+        this.waState = 'REINITIALIZE_FAILED';
+        console.error('❌ Failed to reinitialize:', error);
+        throw new Error('WhatsApp logout completed, but reconnect setup failed');
+      }
+
+      return {
+        success: true,
+        state: this.waState,
+        message: 'Logged out successfully. Ready for a new QR scan.',
+      };
+    } finally {
+      this.isLoggingOut = false;
+    }
+  }
+
+  private async withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: string): Promise<T> {
+    let timeout: NodeJS.Timeout | null = null;
+
+    try {
+      return await Promise.race([
+        promise,
+        new Promise<never>((_, reject) => {
+          timeout = setTimeout(() => reject(new Error(message)), timeoutMs);
+        }),
+      ]);
+    } finally {
+      if (timeout) {
+        clearTimeout(timeout);
       }
     }
   }

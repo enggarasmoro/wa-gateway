@@ -1,18 +1,24 @@
+import 'dotenv/config';
 import express, { Application, Request, Response, NextFunction } from 'express';
-import dotenv from 'dotenv';
 import helmet from 'helmet';
+import { Server } from 'http';
 import path from 'path';
+import { randomUUID } from 'crypto';
 import messageRoutes from './routes/message.route';
 import dashboardRoutes from './routes/dashboard.route';
 import { whatsappService } from './services/whatsapp.service';
 import { apiKeyAuth } from './middlewares/auth.middleware';
-
-// Load environment variables
-dotenv.config();
+import {
+  createOperationContext,
+  logOperationFinish,
+  logOperationStart,
+} from './utils/logger.util';
 
 const app: Application = express();
 const PORT = parseInt(process.env.PORT || '3001', 10);
 const HOST = process.env.HOST || '0.0.0.0';
+let server: Server | null = null;
+let isShuttingDown = false;
 
 // Trust proxy - required when behind reverse proxy (Traefik)
 // for correct IP detection in rate limiting
@@ -36,8 +42,29 @@ app.use(express.urlencoded({ extended: true }));
 
 // Request logging middleware
 app.use((req: Request, res: Response, next: NextFunction) => {
-  const timestamp = new Date().toISOString();
-  console.log(`[${timestamp}] ${req.method} ${req.path}`);
+  const headerCorrelationId = req.headers['x-correlation-id'];
+  const correlationId = typeof headerCorrelationId === 'string' && headerCorrelationId.trim()
+    ? headerCorrelationId.trim()
+    : randomUUID();
+  const context = createOperationContext(`${req.method} ${req.path}`, correlationId);
+
+  res.locals.correlationId = correlationId;
+  res.setHeader('X-Correlation-Id', correlationId);
+
+  logOperationStart(context, {
+    method: req.method,
+    path: req.path,
+  });
+
+  res.on('finish', () => {
+    logOperationFinish(context, res.statusCode >= 400 ? 'failure' : 'success', {
+      method: req.method,
+      path: req.path,
+      statusCode: res.statusCode,
+      userId: res.locals.userId,
+    });
+  });
+
   next();
 });
 
@@ -57,13 +84,16 @@ app.get('/', (req: Request, res: Response) => {
 
 // Health check - always return 200 so Docker healthcheck passes
 // WhatsApp connection status is in the response body
-app.get('/health', (req: Request, res: Response) => {
-  const isConnected = whatsappService.isConnected();
+app.get('/health', async (req: Request, res: Response) => {
+  const stateSnapshot = await whatsappService.refreshConnectionState('health');
+  const isConnected = stateSnapshot.isConnected;
   const state = whatsappService.getWAState();
   res.status(200).json({
     status: 'ok',
     whatsapp: isConnected ? 'connected' : 'disconnected',
+    ready: stateSnapshot.isReady,
     state,
+    lastError: stateSnapshot.lastError,
     timestamp: new Date().toISOString(),
   });
 });
@@ -101,7 +131,7 @@ async function startServer() {
     await whatsappService.initialize();
 
     // Start Express server
-    app.listen(PORT, HOST, () => {
+    server = app.listen(PORT, HOST, () => {
       console.log('');
       console.log('='.repeat(50));
       console.log(`✅ Server running on http://${HOST}:${PORT}`);
@@ -121,14 +151,36 @@ async function startServer() {
 }
 
 // Handle graceful shutdown
+async function shutdown(signal: string): Promise<void> {
+  if (isShuttingDown) return;
+  isShuttingDown = true;
+
+  console.log(`\n👋 Shutting down gracefully (${signal})...`);
+
+  try {
+    if (server) {
+      await new Promise<void>((resolve, reject) => {
+        server?.close((error?: Error) => {
+          if (error) reject(error);
+          else resolve();
+        });
+      });
+    }
+
+    await whatsappService.destroy();
+    process.exit(0);
+  } catch (error) {
+    console.error('❌ Error during graceful shutdown:', error);
+    process.exit(1);
+  }
+}
+
 process.on('SIGINT', () => {
-  console.log('\n👋 Shutting down gracefully...');
-  process.exit(0);
+  void shutdown('SIGINT');
 });
 
 process.on('SIGTERM', () => {
-  console.log('\n👋 Shutting down gracefully...');
-  process.exit(0);
+  void shutdown('SIGTERM');
 });
 
 // Start the server

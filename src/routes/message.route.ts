@@ -1,9 +1,21 @@
 import { Router, Request, Response } from 'express';
 import { whatsappService } from '../services/whatsapp.service';
-import { SendMessageRequest, BroadcastRequest, HealthResponse } from '../types';
-import { formatPhoneNumber, parseTargets } from '../utils/phone.util';
+import { HealthResponse, SendMessageOptions } from '../types';
+import {
+  RequestValidationError,
+  validateBroadcastRequest,
+  validateSendRequest,
+} from '../utils/request-validation.util';
+import { getMessageResponseHttpStatus, getMessageResponsesHttpStatus } from '../utils/http-status.util';
 
 const router = Router();
+
+function getSendOptions(res: Response): SendMessageOptions {
+  return {
+    correlationId: typeof res.locals.correlationId === 'string' ? res.locals.correlationId : undefined,
+    userId: typeof res.locals.userId === 'string' ? res.locals.userId : undefined,
+  };
+}
 
 /**
  * POST /api/send
@@ -17,26 +29,14 @@ const router = Router();
  */
 router.post('/send', async (req: Request, res: Response) => {
   try {
-    const { target, message, countryCode }: SendMessageRequest = req.body;
-
-    // Validate request
-    if (!target || !message) {
-      return res.status(400).json({
-        success: false,
-        status: 'error',
-        message: 'Missing required fields: target and message',
-      });
-    }
-
-    // Handle comma-separated targets (for backward compatibility with Fonnte)
-    const targets = parseTargets(target);
+    const { targets, message } = validateSendRequest(req.body);
     
     if (targets.length > 1) {
       // Multiple targets - send as broadcast
-      const results = await whatsappService.sendBroadcast(targets, message);
+      const results = await whatsappService.sendBroadcast(targets, message, getSendOptions(res));
       const allSuccess = results.every((r) => r.success);
       
-      return res.status(allSuccess ? 200 : 207).json({
+      return res.status(getMessageResponsesHttpStatus(results)).json({
         success: allSuccess,
         status: allSuccess ? 'sent' : 'partial',
         message: `Sent to ${results.filter((r) => r.success).length}/${results.length} targets`,
@@ -45,15 +45,23 @@ router.post('/send', async (req: Request, res: Response) => {
     }
 
     // Single target
-    const result = await whatsappService.sendMessage(targets[0], message);
+    const result = await whatsappService.sendMessage(targets[0], message, getSendOptions(res));
 
-    return res.status(result.success ? 200 : 500).json(result);
+    return res.status(getMessageResponseHttpStatus(result)).json(result);
   } catch (error) {
+    if (error instanceof RequestValidationError) {
+      return res.status(400).json({
+        success: false,
+        status: 'error',
+        message: error.message,
+      });
+    }
+
     console.error('Error in /send endpoint:', error);
     return res.status(500).json({
       success: false,
       status: 'error',
-      message: `Internal server error: ${(error as Error).message}`,
+      message: 'Internal server error',
     });
   }
 });
@@ -70,30 +78,13 @@ router.post('/send', async (req: Request, res: Response) => {
  */
 router.post('/broadcast', async (req: Request, res: Response) => {
   try {
-    const { targets, message }: BroadcastRequest = req.body;
+    const { targets, message } = validateBroadcastRequest(req.body);
 
-    // Validate request
-    if (!targets || !Array.isArray(targets) || targets.length === 0) {
-      return res.status(400).json({
-        success: false,
-        status: 'error',
-        message: 'Missing or invalid required field: targets (must be non-empty array)',
-      });
-    }
-
-    if (!message) {
-      return res.status(400).json({
-        success: false,
-        status: 'error',
-        message: 'Missing required field: message',
-      });
-    }
-
-    const results = await whatsappService.sendBroadcast(targets, message);
+    const results = await whatsappService.sendBroadcast(targets, message, getSendOptions(res));
     const successCount = results.filter((r) => r.success).length;
     const allSuccess = successCount === results.length;
 
-    return res.status(allSuccess ? 200 : 207).json({
+    return res.status(getMessageResponsesHttpStatus(results)).json({
       success: allSuccess,
       status: allSuccess ? 'sent' : 'partial',
       message: `Sent to ${successCount}/${results.length} targets`,
@@ -103,11 +94,19 @@ router.post('/broadcast', async (req: Request, res: Response) => {
       results,
     });
   } catch (error) {
+    if (error instanceof RequestValidationError) {
+      return res.status(400).json({
+        success: false,
+        status: 'error',
+        message: error.message,
+      });
+    }
+
     console.error('Error in /broadcast endpoint:', error);
     return res.status(500).json({
       success: false,
       status: 'error',
-      message: `Internal server error: ${(error as Error).message}`,
+      message: 'Internal server error',
     });
   }
 });
@@ -116,8 +115,8 @@ router.post('/broadcast', async (req: Request, res: Response) => {
  * GET /health
  * Health check endpoint
  */
-router.get('/health', (req: Request, res: Response) => {
-  const state = whatsappService.getConnectionState();
+router.get('/health', async (req: Request, res: Response) => {
+  const state = await whatsappService.refreshConnectionState('api/health');
 
   const response: HealthResponse = {
     status: state.isConnected ? 'connected' : 'disconnected',
@@ -133,16 +132,18 @@ router.get('/health', (req: Request, res: Response) => {
  * GET /status
  * Detailed status endpoint
  */
-router.get('/status', (req: Request, res: Response) => {
-  const state = whatsappService.getConnectionState();
+router.get('/status', async (req: Request, res: Response) => {
+  const state = await whatsappService.refreshConnectionState('api/status');
 
   return res.json({
     connected: state.isConnected,
+    ready: state.isReady,
     phoneNumber: state.phoneNumber,
     uptime: whatsappService.getUptime(),
     uptimeFormatted: formatUptime(whatsappService.getUptime()),
     startTime: state.startTime.toISOString(),
     qrDisplayed: state.qrDisplayed,
+    lastError: state.lastError,
     timestamp: new Date().toISOString(),
   });
 });
