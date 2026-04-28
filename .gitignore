@@ -3,3 +3,5 @@ dist/
 auth/
 *.log
 .env
+.claude/*
+docs/*
