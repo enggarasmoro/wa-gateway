@@ -25,5 +25,7 @@ export function isTransientWhatsAppInjectionError(error: unknown): boolean {
     'Execution context was destroyed',
     'Runtime.callFunctionOn timed out',
     'auth timeout',
+    // WhatsApp Web internal API not available — page JS context is uninitialized or corrupt
+    'Cannot read properties of undefined',
   ].some((needle) => message.includes(needle));
 }
