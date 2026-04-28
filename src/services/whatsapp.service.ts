@@ -59,7 +59,7 @@ class WhatsAppService {
   private readonly INITIALIZE_RETRIES = readIntegerEnv('WHATSAPP_INITIALIZE_RETRIES', 2, { min: 0, max: 20 });
   private readonly INITIALIZE_RETRY_DELAY_MS = readIntegerEnv('WHATSAPP_INITIALIZE_RETRY_DELAY_MS', 5000, { min: 0, max: 300000 });
   private readonly AUTH_TIMEOUT_MS = readIntegerEnv('WHATSAPP_AUTH_TIMEOUT_MS', 120000, { min: 1000, max: 600000 });
-  private readonly PUPPETEER_PROTOCOL_TIMEOUT_MS = readIntegerEnv('PUPPETEER_PROTOCOL_TIMEOUT_MS', 180000, { min: 1000, max: 600000 });
+  private readonly PUPPETEER_PROTOCOL_TIMEOUT_MS = readIntegerEnv('PUPPETEER_PROTOCOL_TIMEOUT_MS', 300000, { min: 1000, max: 600000 });
   private readonly CHROME_NO_SANDBOX = readBooleanEnv('CHROME_NO_SANDBOX', false);
   private readonly LOG_MESSAGE_CONTENT = readBooleanEnv('LOG_MESSAGE_CONTENT', false);
 
