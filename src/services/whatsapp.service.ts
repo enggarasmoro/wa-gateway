@@ -770,9 +770,9 @@ class WhatsAppService {
 
     const message = getErrorMessage(error);
     this.connectionState.lastError = message;
-    console.warn(`⚠️ Ignored transient WhatsApp runtime error from ${source}: ${message}`);
+    console.warn(`⚠️ Transient WhatsApp runtime error from ${source}, scheduling reconnect: ${message}`);
 
-    if (!this.isReady && !this.isInitializing && !this.isLoggingOut && !this.isShuttingDown) {
+    if (!this.isInitializing && !this.isLoggingOut && !this.isShuttingDown) {
       this.scheduleReconnect(this.clientGeneration);
     }
 
