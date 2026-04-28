@@ -5,3 +5,4 @@ auth/
 .env
 .claude/*
 docs/*
+CLAUDE.md

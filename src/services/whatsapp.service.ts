@@ -445,7 +445,10 @@ class WhatsAppService {
       };
     } catch (error) {
       console.error(`❌ Error sending message:`, error);
-      
+
+      // Trigger reconnect if the Chrome page is frozen (transient injection error)
+      this.handleRuntimeError(error, 'sendMessage');
+
       // Log error
       this.addMessageLog({
         timestamp: new Date(),
