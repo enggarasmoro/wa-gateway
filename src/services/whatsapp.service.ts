@@ -83,9 +83,16 @@ class WhatsAppService {
         clientId: 'wa-gateway',
       }),
       authTimeoutMs: this.AUTH_TIMEOUT_MS,
+      // Anti-auto-read: keep the account presence "unavailable" so incoming
+      // messages do NOT get marked as read just because the client is online.
+      markOnlineAvailable: false,
       puppeteer: {
         headless: true,
         protocolTimeout: this.PUPPETEER_PROTOCOL_TIMEOUT_MS,
+        // Anti-detection: pin a realistic desktop Chrome UA. Default headless UA
+        // is trivially fingerprinted by WhatsApp's anti-bot heuristics.
+        userAgent:
+          'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
         args: [
           ...(this.CHROME_NO_SANDBOX ? ['--no-sandbox', '--disable-setuid-sandbox', '--no-zygote'] : []),
           '--disable-dev-shm-usage',
@@ -104,7 +111,7 @@ class WhatsAppService {
         ],
         timeout: 120000,
       },
-    });
+    } as ConstructorParameters<typeof Client>[0]);
 
     this.client = client;
     this.setupEventHandlers(client, generation);
@@ -395,20 +402,12 @@ class WhatsAppService {
 
       console.log(`📤 Sending message to: ${this.maskTarget(formattedNumber)}`);
 
-      // Anti-ban: Get chat and simulate typing
-      try {
-        const chat = await this.client.getChatById(chatId);
-        await chat.sendStateTyping();
-        console.log(`⌨️ Simulating typing...`);
-        
-        // Random typing delay (1-3 seconds)
-        const typingDelay = this.randomDelay(this.TYPING_DELAY_MIN, this.TYPING_DELAY_MAX);
-        await this.delay(typingDelay);
-        await chat.clearState();
-      } catch (typingError) {
-        // Ignore typing errors, continue with sending
-        console.log(`⚠️ Could not simulate typing, continuing...`);
-      }
+      // Anti-ban: random pre-send delay only. Typing simulation was removed
+      // because chat.sendStateTyping() forces the account into "online +
+      // composing" presence on the target chat, which causes WhatsApp Web to
+      // mark unread incoming messages from that contact as read (blue ticks).
+      const preSendDelay = this.randomDelay(this.TYPING_DELAY_MIN, this.TYPING_DELAY_MAX);
+      await this.delay(preSendDelay);
 
       // Send message with sendSeen: false to avoid markedUnread error
       const result = await this.client.sendMessage(chatId, message, {
@@ -573,6 +572,12 @@ class WhatsAppService {
     this.isReady = true;
     this.waState = 'CONNECTED';
     this.qrCodeBase64 = null;
+
+    // Anti-auto-read: force presence "unavailable" so incoming messages do not
+    // get marked as seen (blue ticks) while the gateway is online.
+    void this.client
+      .sendPresenceUnavailable()
+      .catch((err) => console.warn('⚠️ Failed to set presence unavailable:', (err as Error).message));
 
     const info = this.client.info;
     if (info) {
