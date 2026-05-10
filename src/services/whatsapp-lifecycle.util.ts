@@ -27,5 +27,12 @@ export function isTransientWhatsAppInjectionError(error: unknown): boolean {
     'auth timeout',
     // WhatsApp Web internal API not available — page JS context is uninitialized or corrupt
     'Cannot read properties of undefined',
+    // Puppeteer page/browser/frame closed before call resolved — client is dead, must reconnect
+    'Target closed',
+    'Session closed',
+    // V8 garbage-collected the pending Runtime.callFunctionOn callback (frame detached)
+    'Promise was collected',
+    // Generic CDP protocol failures — treat as transient and reconnect
+    'Protocol error',
   ].some((needle) => message.includes(needle));
 }
