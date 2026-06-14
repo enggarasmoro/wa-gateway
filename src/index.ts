@@ -123,6 +123,8 @@ app.get('/health', async (req: Request, res: Response) => {
     status: 'ok',
     whatsapp: isConnected ? 'connected' : 'disconnected',
     ready: stateSnapshot.isReady,
+    recovering: stateSnapshot.isRecovering,
+    reconnectScheduled: stateSnapshot.reconnectScheduled,
     state,
     lastError: stateSnapshot.lastError,
     timestamp: new Date().toISOString(),

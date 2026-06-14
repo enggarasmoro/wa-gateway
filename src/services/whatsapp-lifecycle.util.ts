@@ -36,3 +36,20 @@ export function isTransientWhatsAppInjectionError(error: unknown): boolean {
     'Protocol error',
   ].some((needle) => message.includes(needle));
 }
+
+export function shouldRecoverFromState(state: string | null | undefined): boolean {
+  if (!state) {
+    return true;
+  }
+
+  return [
+    'CONFLICT',
+    'DEPRECATED',
+    'DISCONNECTED',
+    'PROXYBLOCK',
+    'SMB_TOS_BLOCK',
+    'TIMEOUT',
+    'TOS_BLOCK',
+    'UNLAUNCHED',
+  ].includes(state);
+}

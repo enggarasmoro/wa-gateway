@@ -227,6 +227,16 @@
         margin-top: 0.25rem;
       }
 
+      .status-wide {
+        grid-column: 1 / -1;
+      }
+
+      #statusLastError {
+        color: var(--text-dim);
+        font-size: 0.875rem;
+        overflow-wrap: anywhere;
+      }
+
       .status-connected {
         color: var(--success);
       }
@@ -278,6 +288,26 @@
       }
 
       .send-result.error {
+        background: rgba(255, 68, 102, 0.1);
+        border: 1px solid var(--error);
+        color: var(--error);
+      }
+
+      .action-result {
+        margin-top: 0.75rem;
+        padding: 0.625rem 0.75rem;
+        border-radius: 6px;
+        font-size: 0.8125rem;
+        display: none;
+      }
+
+      .action-result.success {
+        background: rgba(0, 255, 136, 0.1);
+        border: 1px solid var(--success);
+        color: var(--success);
+      }
+
+      .action-result.error {
         background: rgba(255, 68, 102, 0.1);
         border: 1px solid var(--error);
         color: var(--error);
@@ -352,20 +382,43 @@
       }
 
       /* WA Logout */
-      .wa-logout {
+      .wa-actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.75rem;
         margin-top: 1rem;
-        text-align: center;
+      }
+
+      .btn-wa-reconnect,
+      .btn-wa-logout {
+        min-width: 150px;
+        padding: 0.625rem 1.25rem;
+        border-radius: 6px;
+        cursor: pointer;
+        font-size: 0.875rem;
+        transition: all 0.2s;
+      }
+
+      .btn-wa-reconnect {
+        background: var(--accent-dim);
+        border: 1px solid var(--accent);
+        color: var(--text);
+      }
+
+      .btn-wa-reconnect:hover:not(:disabled) {
+        background: var(--accent);
+        color: var(--bg-primary);
+      }
+
+      .btn-wa-reconnect:disabled {
+        cursor: wait;
+        opacity: 0.7;
       }
 
       .btn-wa-logout {
         background: transparent;
         border: 1px solid var(--error);
         color: var(--error);
-        padding: 0.625rem 1.25rem;
-        border-radius: 6px;
-        cursor: pointer;
-        font-size: 0.875rem;
-        transition: all 0.2s;
       }
 
       .btn-wa-logout:hover {
@@ -460,12 +513,20 @@
                 <div class="label">Uptime</div>
                 <div id="statusUptime" class="value">-</div>
               </div>
+              <div class="status-item status-wide">
+                <div class="label">Last Error</div>
+                <div id="statusLastError" class="value">-</div>
+              </div>
             </div>
-            <div class="wa-logout">
+            <div class="wa-actions">
+              <button id="btnWAReconnect" class="btn-wa-reconnect">
+                Refresh Connection
+              </button>
               <button id="btnWALogout" class="btn-wa-logout">
                 🚪 Logout WhatsApp
               </button>
             </div>
+            <div id="reconnectResult" class="action-result"></div>
           </div>
 
           <!-- QR Code -->

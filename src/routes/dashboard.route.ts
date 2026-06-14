@@ -209,6 +209,20 @@ router.post('/dashboard/logout', dashboardAuth, async (req: Request, res: Respon
 });
 
 /**
+ * POST /api/dashboard/reconnect
+ * Recreate WhatsApp browser client without clearing LocalAuth session
+ */
+router.post('/dashboard/reconnect', dashboardAuth, (req: Request, res: Response): void => {
+  const result = whatsappService.requestReconnect('dashboard');
+
+  res.status(result.success ? 202 : 409).json({
+    success: result.success,
+    state: result.state,
+    message: result.message,
+  });
+});
+
+/**
  * GET /api/dashboard/logs
  * Get message history
  */

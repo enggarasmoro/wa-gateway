@@ -2,7 +2,13 @@ import { Client, LocalAuth, Message, WAState } from 'whatsapp-web.js';
 import * as qrcode from 'qrcode-terminal';
 import * as QRCode from 'qrcode';
 import { randomUUID } from 'crypto';
-import { ConnectionState, MessageResponse, SendMessageOptions, WhatsAppLogoutResult } from '../types';
+import {
+  ConnectionState,
+  MessageResponse,
+  SendMessageOptions,
+  WhatsAppLogoutResult,
+  WhatsAppReconnectResult,
+} from '../types';
 import { formatPhoneNumber, PhoneNumberValidationError } from '../utils/phone.util';
 import {
   createOperationContext,
@@ -13,6 +19,7 @@ import { readBooleanEnv, readIntegerEnv } from '../utils/env.util';
 import {
   getErrorMessage,
   isTransientWhatsAppInjectionError,
+  shouldRecoverFromState,
   shouldReconnectAfterDisconnect,
 } from './whatsapp-lifecycle.util';
 
@@ -49,6 +56,7 @@ class WhatsAppService {
   private isInitializing: boolean = false;
   private isLoggingOut: boolean = false;
   private isShuttingDown: boolean = false;
+  private runtimeRecoveryInProgress: boolean = false;
 
   // Anti-ban features
   private dailyMessageCount: number = 0;
@@ -445,8 +453,7 @@ class WhatsAppService {
     } catch (error) {
       console.error(`❌ Error sending message:`, error);
 
-      // Trigger reconnect if the Chrome page is frozen (transient injection error)
-      this.handleRuntimeError(error, 'sendMessage');
+      const isRecoverableRuntimeError = this.handleRuntimeError(error, 'sendMessage');
 
       // Log error
       this.addMessageLog({
@@ -460,14 +467,16 @@ class WhatsAppService {
       logOperationFinish(context, 'failure', {
         target: this.maskTarget(formattedNumber),
         userId: options.userId,
-        status: 'error',
+        status: isRecoverableRuntimeError ? 'disconnected' : 'error',
         error: (error as Error).message,
       });
 
       return {
         success: false,
-        status: 'error',
-        message: 'Failed to send message. Check gateway logs for details.',
+        status: isRecoverableRuntimeError ? 'disconnected' : 'error',
+        message: isRecoverableRuntimeError
+          ? 'WhatsApp runtime became unavailable while sending. Reconnect has been scheduled; try again after the gateway is ready.'
+          : 'Failed to send message. Check gateway logs for details.',
         target: formattedNumber,
       };
     }
@@ -532,6 +541,8 @@ class WhatsAppService {
     return {
       ...this.connectionState,
       isReady: this.isReady,
+      isRecovering: this.runtimeRecoveryInProgress || this.waState === 'RECOVERING_RUNTIME',
+      reconnectScheduled: !!this.reconnectTimer,
     };
   }
 
@@ -593,11 +604,17 @@ class WhatsAppService {
    * Avoid rejecting sends because a local ready flag missed an event.
    */
   private async refreshConnectionReadiness(operation: string): Promise<boolean> {
-    if (this.isReady && this.connectionState.isConnected) {
+    const hasCachedReady = this.isReady && this.connectionState.isConnected;
+
+    if (hasCachedReady && !this.shouldVerifyLiveReadiness(operation)) {
       return true;
     }
 
-    if (this.isInitializing || ['ERROR', 'RETRYING_INITIALIZE', 'IDLE'].includes(this.waState)) {
+    if (
+      this.isInitializing ||
+      this.reconnectTimer ||
+      ['ERROR', 'RETRYING_INITIALIZE', 'RECOVERING_RUNTIME', 'IDLE'].includes(this.waState)
+    ) {
       return false;
     }
 
@@ -615,10 +632,29 @@ class WhatsAppService {
 
       this.connectionState.isConnected = false;
       this.isReady = false;
+
+      if (shouldRecoverFromState(state)) {
+        const message = state
+          ? `WhatsApp state is ${state} during ${operation}`
+          : `WhatsApp state unavailable during ${operation}`;
+        this.connectionState.lastError = message;
+        this.startRuntimeRecovery(message);
+      } else {
+        this.connectionState.lastError = state
+          ? `WhatsApp is not ready during ${operation}; current state is ${state}`
+          : this.connectionState.lastError;
+      }
+
       return false;
     } catch (error) {
       const err = error as Error;
       this.connectionState.lastError = err.message;
+      this.connectionState.isConnected = false;
+      this.isReady = false;
+
+      if (isTransientWhatsAppInjectionError(error)) {
+        this.handleRuntimeError(error, `readiness check during ${operation}`);
+      }
 
       const now = Date.now();
       if (now - this.lastReadinessLogAt > 30000) {
@@ -628,6 +664,14 @@ class WhatsAppService {
 
       return false;
     }
+  }
+
+  private shouldVerifyLiveReadiness(operation: string): boolean {
+    return [
+      'sendMessage',
+      'status',
+      'health',
+    ].some((needle) => operation.includes(needle));
   }
 
   private getNotReadyMessage(): string {
@@ -741,22 +785,47 @@ class WhatsAppService {
     this.createClient();
   }
 
-  private scheduleReconnect(generation: number): void {
-    this.clearReconnectTimer();
-    console.log('🔄 Attempting to reconnect in 10 seconds...');
+  private scheduleReconnect(
+    generation: number,
+    replaceClient = false,
+    reason = 'disconnect',
+    delayMs = 10000
+  ): void {
+    if (this.reconnectTimer) {
+      console.log('ℹ️ Reconnect already scheduled');
+      return;
+    }
 
-    this.reconnectTimer = setTimeout(() => {
+    const delaySeconds = Math.round(delayMs / 1000);
+    console.log(delayMs > 0
+      ? `🔄 Attempting to reconnect in ${delaySeconds} seconds...`
+      : '🔄 Attempting to reconnect now...');
+
+    this.reconnectTimer = setTimeout(async () => {
       this.reconnectTimer = null;
 
       if (!this.isActiveClient(generation) || this.isLoggingOut || this.isShuttingDown) {
         console.log('ℹ️ Reconnect skipped because client lifecycle changed');
+        if (replaceClient) {
+          this.runtimeRecoveryInProgress = false;
+        }
         return;
       }
 
-      this.initialize().catch((err) => {
+      try {
+        if (replaceClient) {
+          await this.replaceFailedClient(reason);
+        }
+
+        await this.initialize();
+      } catch (err) {
         console.error('❌ Reconnection failed:', err);
-      });
-    }, 10000);
+      } finally {
+        if (replaceClient) {
+          this.runtimeRecoveryInProgress = false;
+        }
+      }
+    }, delayMs);
   }
 
   private resetConnectionState(state: string): void {
@@ -777,11 +846,66 @@ class WhatsAppService {
     this.connectionState.lastError = message;
     console.warn(`⚠️ Transient WhatsApp runtime error from ${source}, scheduling reconnect: ${message}`);
 
-    if (!this.isInitializing && !this.isLoggingOut && !this.isShuttingDown) {
-      this.scheduleReconnect(this.clientGeneration);
-    }
+    this.startRuntimeRecovery(`runtime error from ${source}`);
 
     return true;
+  }
+
+  private startRuntimeRecovery(reason: string, delayMs = 10000): boolean {
+    if (this.isLoggingOut || this.isShuttingDown) {
+      return false;
+    }
+
+    if (this.runtimeRecoveryInProgress) {
+      this.resetConnectionState('RECOVERING_RUNTIME');
+      return false;
+    }
+
+    if (this.isInitializing) {
+      return false;
+    }
+
+    this.resetConnectionState('RECOVERING_RUNTIME');
+    this.runtimeRecoveryInProgress = true;
+    this.clearReconnectTimer();
+    this.scheduleReconnect(this.clientGeneration, true, reason, delayMs);
+
+    return true;
+  }
+
+  requestReconnect(source: string): WhatsAppReconnectResult {
+    if (this.isShuttingDown) {
+      return {
+        success: false,
+        state: this.waState,
+        message: 'Gateway is shutting down. Reconnect cannot be started.',
+      };
+    }
+
+    if (this.isLoggingOut) {
+      return {
+        success: false,
+        state: this.waState,
+        message: 'WhatsApp logout is in progress. Wait until it finishes.',
+      };
+    }
+
+    if (this.runtimeRecoveryInProgress || this.isInitializing) {
+      return {
+        success: true,
+        state: this.waState,
+        message: 'WhatsApp reconnect is already in progress.',
+      };
+    }
+
+    this.connectionState.lastError = undefined;
+    this.startRuntimeRecovery(`manual reconnect from ${source}`, 0);
+
+    return {
+      success: true,
+      state: this.waState,
+      message: 'WhatsApp reconnect started.',
+    };
   }
 
   /**

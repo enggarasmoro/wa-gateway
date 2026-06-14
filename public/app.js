@@ -79,10 +79,17 @@ async function fetchStatus() {
     if (data.success) {
       const d = data.data;
       const connEl = document.getElementById("statusConnection");
-      connEl.textContent = d.isConnected ? "Connected" : "Disconnected";
+      const isRecovering = d.isRecovering || d.reconnectScheduled || d.state === "RECOVERING_RUNTIME";
+      connEl.textContent = isRecovering
+        ? "Recovering"
+        : d.isConnected
+        ? "Connected"
+        : "Disconnected";
       connEl.className =
         "value " +
-        (d.isConnected
+        (isRecovering
+          ? "status-waiting"
+          : d.isConnected
           ? "status-connected"
           : d.state === "WAITING_FOR_QR_SCAN"
           ? "status-waiting"
@@ -93,6 +100,11 @@ async function fetchStatus() {
         ? `+${d.phoneNumber}`
         : "-";
       document.getElementById("statusUptime").textContent = formatUptime(d.uptime);
+      document.getElementById("statusLastError").textContent = d.lastError || "-";
+
+      const reconnectButton = document.getElementById("btnWAReconnect");
+      reconnectButton.disabled = isRecovering;
+      reconnectButton.textContent = isRecovering ? "Reconnecting..." : "Refresh Connection";
 
       if (d.hasQR && !d.isConnected) {
         fetchQR();
@@ -217,6 +229,30 @@ document.getElementById("sendForm").addEventListener("submit", async (e) => {
     resultEl.textContent = "Failed to send message";
     resultEl.className = "send-result error";
     resultEl.style.display = "block";
+  }
+});
+
+document.getElementById("btnWAReconnect").addEventListener("click", async () => {
+  const resultEl = document.getElementById("reconnectResult");
+  const button = document.getElementById("btnWAReconnect");
+
+  resultEl.style.display = "none";
+  button.disabled = true;
+  button.textContent = "Reconnecting...";
+
+  try {
+    const res = await authFetch("/dashboard/reconnect", { method: "POST" });
+    const data = await res.json();
+    resultEl.textContent = data.message || (data.success ? "Reconnect started" : "Reconnect failed");
+    resultEl.className = "action-result " + (data.success ? "success" : "error");
+    resultEl.style.display = "block";
+    fetchStatus();
+  } catch (err) {
+    resultEl.textContent = "Failed to start reconnect";
+    resultEl.className = "action-result error";
+    resultEl.style.display = "block";
+  } finally {
+    setTimeout(fetchStatus, 1500);
   }
 });
 

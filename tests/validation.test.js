@@ -29,6 +29,7 @@ const { DASHBOARD_TOKEN_COOKIE, getCookieValue } = require('../dist/services/aut
 const {
   getErrorMessage,
   isTransientWhatsAppInjectionError,
+  shouldRecoverFromState,
   shouldReconnectAfterDisconnect,
 } = require('../dist/services/whatsapp-lifecycle.util');
 
@@ -292,8 +293,18 @@ test('isTransientWhatsAppInjectionError detects known Puppeteer injection failur
     true
   );
   assert.equal(isTransientWhatsAppInjectionError('auth timeout'), true);
-  assert.equal(isTransientWhatsAppInjectionError(new Error('ProtocolError: Target closed')), false);
+  assert.equal(isTransientWhatsAppInjectionError(new Error('ProtocolError: Target closed')), true);
   assert.equal(isTransientWhatsAppInjectionError(new Error('Invalid API key')), false);
+});
+
+test('shouldRecoverFromState detects states that cannot safely send messages', () => {
+  assert.equal(shouldRecoverFromState('CONNECTED'), false);
+  assert.equal(shouldRecoverFromState('TIMEOUT'), true);
+  assert.equal(shouldRecoverFromState('UNLAUNCHED'), true);
+  assert.equal(shouldRecoverFromState('PAIRING'), false);
+  assert.equal(shouldRecoverFromState('UNPAIRED_IDLE'), false);
+  assert.equal(shouldRecoverFromState(null), true);
+  assert.equal(shouldRecoverFromState(undefined), true);
 });
 
 test('getMessageResponseHttpStatus maps expected send failures', () => {
@@ -301,6 +312,11 @@ test('getMessageResponseHttpStatus maps expected send failures', () => {
   assert.equal(getMessageResponseHttpStatus({ success: false, status: 'invalid_number', message: 'bad' }), 400);
   assert.equal(getMessageResponseHttpStatus({ success: false, status: 'rate_limited', message: 'limit' }), 429);
   assert.equal(getMessageResponseHttpStatus({ success: false, status: 'disconnected', message: 'offline' }), 503);
+  assert.equal(getMessageResponseHttpStatus({
+    success: false,
+    status: 'disconnected',
+    message: 'WhatsApp runtime became unavailable while sending.',
+  }), 503);
   assert.equal(getMessageResponseHttpStatus({ success: false, status: 'error', message: 'failed' }), 500);
 });
 

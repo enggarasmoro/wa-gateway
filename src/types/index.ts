@@ -28,6 +28,12 @@ export interface WhatsAppLogoutResult {
   message: string;
 }
 
+export interface WhatsAppReconnectResult {
+  success: boolean;
+  state: string;
+  message: string;
+}
+
 export interface HealthResponse {
   status: 'connected' | 'disconnected' | 'connecting';
   uptime: number;
@@ -42,4 +48,6 @@ export interface ConnectionState {
   startTime: Date;
   qrDisplayed: boolean;
   lastError?: string;
+  isRecovering?: boolean;
+  reconnectScheduled?: boolean;
 }
