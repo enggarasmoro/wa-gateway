@@ -55,6 +55,7 @@ Login with `DASHBOARD_USERNAME` and `DASHBOARD_PASSWORD`. The service fails at s
 - `GET /api/dashboard/status` - Connection status
 - `GET /api/dashboard/qr` - QR code (base64)
 - `POST /api/dashboard/send` - Send message
+- `POST /api/dashboard/reconnect` - Recreate WhatsApp browser client without clearing LocalAuth session
 - `POST /api/dashboard/logout` - Logout WhatsApp
 
 ### API (X-API-Key Header)
@@ -82,6 +83,14 @@ Login with `DASHBOARD_USERNAME` and `DASHBOARD_PASSWORD`. The service fails at s
 | `PUPPETEER_PROTOCOL_TIMEOUT_MS` | 180000 | Chrome DevTools protocol timeout for Puppeteer calls |
 | `CHROME_NO_SANDBOX` | false | Add Chrome no-sandbox flags only when the runtime cannot support sandboxing |
 | `LOG_MESSAGE_CONTENT` | false | Store dashboard message previews; disabled redacts message content |
+
+## WhatsApp Recovery
+
+The gateway verifies live WhatsApp readiness before status checks, health checks, and sends. If WhatsApp Web or Puppeteer enters a broken runtime state, the service marks the client unavailable, returns `503` for send attempts, and recreates the browser client using the existing `LocalAuth` session.
+
+Use dashboard **Refresh Connection** when the status is `Recovering`, `Disconnected`, or `Last Error` shows a WhatsApp runtime/browser issue. This refresh does not clear the WhatsApp session, so it usually does not require scanning QR again.
+
+Use **Logout WhatsApp** only when the session is invalid, QR needs to be regenerated, or you intentionally want to connect a different WhatsApp account.
 
 ## 📁 Project Structure
 

@@ -39,7 +39,7 @@ export function isTransientWhatsAppInjectionError(error: unknown): boolean {
 
 export function shouldRecoverFromState(state: string | null | undefined): boolean {
   if (!state) {
-    return true;
+    return false;
   }
 
   return [
@@ -52,4 +52,25 @@ export function shouldRecoverFromState(state: string | null | undefined): boolea
     'TOS_BLOCK',
     'UNLAUNCHED',
   ].includes(state);
+}
+
+export function shouldRecoverFromReadinessError(
+  error: unknown,
+  currentState: string,
+  qrDisplayed: boolean,
+  hadCachedReady: boolean
+): boolean {
+  if (!isTransientWhatsAppInjectionError(error)) {
+    return false;
+  }
+
+  if (hadCachedReady) {
+    return true;
+  }
+
+  if (qrDisplayed) {
+    return false;
+  }
+
+  return !['WAITING_FOR_QR_SCAN', 'AUTHENTICATED', 'INITIALIZING'].includes(currentState);
 }

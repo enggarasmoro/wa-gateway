@@ -19,6 +19,7 @@ import { readBooleanEnv, readIntegerEnv } from '../utils/env.util';
 import {
   getErrorMessage,
   isTransientWhatsAppInjectionError,
+  shouldRecoverFromReadinessError,
   shouldRecoverFromState,
   shouldReconnectAfterDisconnect,
 } from './whatsapp-lifecycle.util';
@@ -133,6 +134,11 @@ class WhatsAppService {
     // QR Code received - User needs to scan
     client.on('qr', async (qr: string) => {
       if (!this.isActiveClient(generation)) return;
+
+      this.clearReconnectTimer();
+      this.runtimeRecoveryInProgress = false;
+      this.connectionState.isConnected = false;
+      this.isReady = false;
 
       console.log('\n');
       console.log('═'.repeat(50));
@@ -633,16 +639,23 @@ class WhatsAppService {
       this.connectionState.isConnected = false;
       this.isReady = false;
 
-      if (shouldRecoverFromState(state)) {
-        const message = state
-          ? `WhatsApp state is ${state} during ${operation}`
-          : `WhatsApp state unavailable during ${operation}`;
+      if (!state) {
+        if (hasCachedReady) {
+          const message = `WhatsApp state unavailable during ${operation}`;
+          this.connectionState.lastError = message;
+          this.startRuntimeRecovery(message);
+        } else if (
+          !this.connectionState.qrDisplayed &&
+          !['WAITING_FOR_QR_SCAN', 'AUTHENTICATED', 'INITIALIZING'].includes(this.waState)
+        ) {
+          this.connectionState.lastError = `WhatsApp is not ready during ${operation}; state is unavailable`;
+        }
+      } else if (shouldRecoverFromState(state)) {
+        const message = `WhatsApp state is ${state} during ${operation}`;
         this.connectionState.lastError = message;
         this.startRuntimeRecovery(message);
       } else {
-        this.connectionState.lastError = state
-          ? `WhatsApp is not ready during ${operation}; current state is ${state}`
-          : this.connectionState.lastError;
+        this.connectionState.lastError = `WhatsApp is not ready during ${operation}; current state is ${state}`;
       }
 
       return false;
@@ -652,7 +665,14 @@ class WhatsAppService {
       this.connectionState.isConnected = false;
       this.isReady = false;
 
-      if (isTransientWhatsAppInjectionError(error)) {
+      if (
+        shouldRecoverFromReadinessError(
+          error,
+          this.waState,
+          this.connectionState.qrDisplayed,
+          hasCachedReady
+        )
+      ) {
         this.handleRuntimeError(error, `readiness check during ${operation}`);
       }
 

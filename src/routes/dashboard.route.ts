@@ -122,6 +122,8 @@ router.get('/dashboard/status', dashboardAuth, async (req: Request, res: Respons
       qrDisplayed: state.qrDisplayed,
       hasQR: !!qrCode,
       lastError: state.lastError,
+      isRecovering: state.isRecovering,
+      reconnectScheduled: state.reconnectScheduled,
     }
   });
 });

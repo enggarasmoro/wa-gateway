@@ -29,6 +29,7 @@ const { DASHBOARD_TOKEN_COOKIE, getCookieValue } = require('../dist/services/aut
 const {
   getErrorMessage,
   isTransientWhatsAppInjectionError,
+  shouldRecoverFromReadinessError,
   shouldRecoverFromState,
   shouldReconnectAfterDisconnect,
 } = require('../dist/services/whatsapp-lifecycle.util');
@@ -303,8 +304,18 @@ test('shouldRecoverFromState detects states that cannot safely send messages', (
   assert.equal(shouldRecoverFromState('UNLAUNCHED'), true);
   assert.equal(shouldRecoverFromState('PAIRING'), false);
   assert.equal(shouldRecoverFromState('UNPAIRED_IDLE'), false);
-  assert.equal(shouldRecoverFromState(null), true);
-  assert.equal(shouldRecoverFromState(undefined), true);
+  assert.equal(shouldRecoverFromState(null), false);
+  assert.equal(shouldRecoverFromState(undefined), false);
+});
+
+test('shouldRecoverFromReadinessError skips QR/auth startup but recovers stale connected clients', () => {
+  const transientError = new Error('ProtocolError: Runtime.callFunctionOn timed out.');
+
+  assert.equal(shouldRecoverFromReadinessError(transientError, 'WAITING_FOR_QR_SCAN', true, false), false);
+  assert.equal(shouldRecoverFromReadinessError(transientError, 'INITIALIZING', false, false), false);
+  assert.equal(shouldRecoverFromReadinessError(transientError, 'AUTHENTICATED', false, false), false);
+  assert.equal(shouldRecoverFromReadinessError(transientError, 'CONNECTED', false, true), true);
+  assert.equal(shouldRecoverFromReadinessError(new Error('Invalid API key'), 'CONNECTED', false, true), false);
 });
 
 test('getMessageResponseHttpStatus maps expected send failures', () => {
