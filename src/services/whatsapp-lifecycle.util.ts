@@ -18,6 +18,28 @@ export function getErrorMessage(error: unknown): string {
   return 'Unknown error';
 }
 
+export function hasWhatsAppSendCapability(scope: unknown = globalThis): boolean {
+  if (
+    scope === null ||
+    (typeof scope !== 'object' && typeof scope !== 'function') ||
+    !('WWebJS' in scope)
+  ) {
+    return false;
+  }
+
+  const runtime: unknown = scope.WWebJS;
+
+  if (
+    runtime === null ||
+    (typeof runtime !== 'object' && typeof runtime !== 'function') ||
+    !('getChat' in runtime)
+  ) {
+    return false;
+  }
+
+  return typeof runtime.getChat === 'function';
+}
+
 export function isTransientWhatsAppInjectionError(error: unknown): boolean {
   const message = getErrorMessage(error);
 

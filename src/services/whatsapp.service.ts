@@ -18,6 +18,7 @@ import {
 import { readBooleanEnv, readIntegerEnv } from '../utils/env.util';
 import {
   getErrorMessage,
+  hasWhatsAppSendCapability,
   isTransientWhatsAppInjectionError,
   shouldRecoverFromReadinessError,
   shouldRecoverFromState,
@@ -423,6 +424,33 @@ class WhatsAppService {
       const preSendDelay = this.randomDelay(this.TYPING_DELAY_MIN, this.TYPING_DELAY_MAX);
       await this.delay(preSendDelay);
 
+      if (!(await this.hasLiveSendCapability())) {
+        const errorMessage = this.connectionState.lastError
+          ?? 'WhatsApp runtime send capability is unavailable';
+
+        this.addMessageLog({
+          timestamp: new Date(),
+          target: this.maskTarget(formattedNumber),
+          message: this.getLoggedMessagePreview(message),
+          success: false,
+          error: errorMessage,
+        });
+
+        logOperationFinish(context, 'failure', {
+          target: this.maskTarget(formattedNumber),
+          userId: options.userId,
+          status: 'disconnected',
+          error: errorMessage,
+        });
+
+        return {
+          success: false,
+          status: 'disconnected',
+          message: 'WhatsApp runtime became unavailable while sending. Reconnect has been scheduled; try again after the gateway is ready.',
+          target: formattedNumber,
+        };
+      }
+
       // Send message with sendSeen: false to avoid markedUnread error
       const result = await this.client.sendMessage(chatId, message, {
         sendSeen: false,
@@ -708,6 +736,33 @@ class WhatsAppService {
     }
 
     return `WhatsApp is not ready to send messages. Current state: ${this.waState}.`;
+  }
+
+  private async hasLiveSendCapability(): Promise<boolean> {
+    const page = this.client.pupPage;
+
+    if (!page) {
+      const message = 'WhatsApp browser page is unavailable before sendMessage';
+      this.connectionState.lastError = message;
+      this.startRuntimeRecovery(message);
+      return false;
+    }
+
+    try {
+      if (await page.evaluate(hasWhatsAppSendCapability)) {
+        return true;
+      }
+
+      const message = 'WhatsApp runtime send capability is unavailable before sendMessage';
+      this.connectionState.lastError = message;
+      this.startRuntimeRecovery(message);
+      return false;
+    } catch (error) {
+      const message = getErrorMessage(error);
+      this.connectionState.lastError = message;
+      this.startRuntimeRecovery('runtime capability probe failure');
+      return false;
+    }
   }
 
   /**

@@ -28,11 +28,18 @@ const { isApiKeyMatch } = require('../dist/middlewares/auth.middleware');
 const { DASHBOARD_TOKEN_COOKIE, getCookieValue } = require('../dist/services/auth.service');
 const {
   getErrorMessage,
+  hasWhatsAppSendCapability,
   isTransientWhatsAppInjectionError,
   shouldRecoverFromReadinessError,
   shouldRecoverFromState,
   shouldReconnectAfterDisconnect,
 } = require('../dist/services/whatsapp-lifecycle.util');
+
+test('hasWhatsAppSendCapability detects the live WhatsApp send runtime', () => {
+  assert.equal(hasWhatsAppSendCapability({}), false);
+  assert.equal(hasWhatsAppSendCapability({ WWebJS: {} }), false);
+  assert.equal(hasWhatsAppSendCapability({ WWebJS: { getChat() {} } }), true);
+});
 
 test('formatPhoneNumber normalizes Indonesian local numbers', () => {
   assert.equal(formatPhoneNumber('0812-3456-7890'), '6281234567890');
