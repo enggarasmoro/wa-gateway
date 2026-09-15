@@ -1,7 +1,7 @@
 # =============================================
 # Stage 1: Build
 # =============================================
-FROM node:20-slim AS builder
+FROM node:22-bookworm-slim AS builder
 
 WORKDIR /app
 
@@ -16,7 +16,7 @@ RUN npm run build
 # =============================================
 # Stage 2: Production
 # =============================================
-FROM node:20-bullseye-slim
+FROM node:22-bookworm-slim
 
 # Install dependencies for Puppeteer/Chrome
 RUN apt-get update && apt-get install -y \
