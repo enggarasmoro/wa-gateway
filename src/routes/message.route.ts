@@ -45,7 +45,7 @@ router.post('/send', async (req: Request, res: Response) => {
     }
 
     // Single target
-    const result = await whatsappService.sendMessage(targets[0], message, getSendOptions(res));
+    const result = whatsappService.queueMessage(targets[0], message, getSendOptions(res));
 
     return res.status(getMessageResponseHttpStatus(result)).json(result);
   } catch (error) {

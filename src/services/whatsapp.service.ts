@@ -31,15 +31,64 @@ interface MessageLog {
   target: string;
   message: string;
   success: boolean;
-  status: 'pending' | 'sent' | 'unconfirmed' | 'error';
+  status: 'pending' | 'sent' | 'delivered' | 'read' | 'unconfirmed' | 'error';
   id?: string;
   error?: string;
+}
+
+export interface PendingMessageMatch {
+  readonly chatId: string;
+  readonly message: string;
+}
+
+export interface OutgoingMessageIdentity {
+  readonly to?: string;
+  readonly body?: string;
+}
+
+export type MessageAcknowledgementStatus = 'pending' | 'sent' | 'delivered' | 'read' | 'error';
+
+export function getMessageStatusFromAck(ack: number): MessageAcknowledgementStatus {
+  if (ack < 0) return 'error';
+  if (ack >= 3) return 'read';
+  if (ack === 2) return 'delivered';
+  if (ack === 1) return 'sent';
+  return 'pending';
+}
+
+export function findPendingMessageMatch<T extends PendingMessageMatch>(
+  pendingConfirmations: readonly T[],
+  message: OutgoingMessageIdentity
+): T | undefined {
+  if (typeof message.body !== 'string') {
+    return undefined;
+  }
+
+  const exactMatch = pendingConfirmations.find(
+    (pending) => pending.chatId === message.to && pending.message === message.body
+  );
+  if (exactMatch) {
+    return exactMatch;
+  }
+
+  const bodyMatches = pendingConfirmations.filter((pending) => pending.message === message.body);
+  return bodyMatches.length === 1 ? bodyMatches[0] : undefined;
+}
+
+export function createPendingMessageResponse(target: string): MessageResponse {
+  return {
+    success: true,
+    status: 'pending',
+    message: 'Message accepted and awaiting confirmation.',
+    target,
+  };
 }
 
 interface PendingConfirmation {
   chatId: string;
   message: string;
   log: MessageLog;
+  correlationId: string;
   timer: NodeJS.Timeout;
   confirmed: boolean;
 }
@@ -79,7 +128,7 @@ class WhatsAppService {
   private messageLogs: MessageLog[] = [];
   private pendingConfirmations = new Map<string, PendingConfirmation[]>();
   private readonly MAX_LOGS = 100;
-  private readonly PENDING_CONFIRMATION_TIMEOUT_MS = 30000;
+  private readonly PENDING_CONFIRMATION_TIMEOUT_MS = 60000;
   private lastReadinessLogAt: number = 0;
   private clientGeneration: number = 0;
   private reconnectTimer: NodeJS.Timeout | null = null;
@@ -270,7 +319,7 @@ class WhatsAppService {
       if (!this.isActiveClient(generation)) return;
 
       if (msg.fromMe) {
-        this.confirmPendingMessage(msg);
+        this.capturePendingMessageId(msg);
       }
 
       if (msg.fromMe && process.env.LOG_LEVEL === 'debug') {
@@ -282,9 +331,13 @@ class WhatsAppService {
     client.on('message_ack', (msg: Message, ack: number) => {
       if (!this.isActiveClient(generation)) return;
 
+      if (msg.fromMe) {
+        this.handlePendingMessageAck(msg, ack);
+      }
+
       if (process.env.LOG_LEVEL === 'debug') {
         const ackStatus = ['ERROR', 'PENDING', 'SERVER', 'DEVICE', 'READ', 'PLAYED'];
-        console.log(`✓ Message ${msg.id.id}: ${ackStatus[ack] || ack}`);
+        console.log(`✓ Message ${getConfirmedMessageId(msg) ?? 'unknown'}: ${ackStatus[ack] || ack}`);
       }
     });
   }
@@ -349,6 +402,68 @@ class WhatsAppService {
       }
     } finally {
       this.isInitializing = false;
+    }
+  }
+
+  /**
+   * Queues a message send without waiting for WhatsApp Web to return.
+   * The accepted response preserves the existing pending MessageResponse contract.
+   */
+  queueMessage(
+    target: string,
+    message: string,
+    options: SendMessageOptions = {}
+  ): MessageResponse {
+    const correlationId = options.correlationId || randomUUID();
+    const context = createOperationContext('whatsapp.queue_message', correlationId);
+    const targetRef = this.maskTarget(target);
+
+    logOperationStart(context, {
+      target: targetRef,
+      userId: options.userId,
+    });
+
+    try {
+      const formattedNumber = formatPhoneNumber(target);
+      const queuedResponse = createPendingMessageResponse(formattedNumber);
+
+      void this.sendMessage(formattedNumber, message, {
+        ...options,
+        correlationId,
+      }).then((result) => {
+        logOperationFinish(context, result.success ? 'success' : 'failure', {
+          target: this.maskTarget(formattedNumber),
+          userId: options.userId,
+          status: result.status,
+        });
+      }).catch((error) => {
+        logOperationFinish(context, 'failure', {
+          target: this.maskTarget(formattedNumber),
+          userId: options.userId,
+          status: 'error',
+          error: getErrorMessage(error),
+        });
+      });
+
+      return queuedResponse;
+    } catch (error) {
+      const messageText = error instanceof PhoneNumberValidationError
+        ? error.message
+        : 'Invalid phone number';
+
+      logOperationFinish(context, 'failure', {
+        target: targetRef,
+        userId: options.userId,
+        status: 'invalid_number',
+        error: messageText,
+      });
+
+      return {
+        success: false,
+        status: 'invalid_number',
+        message: messageText,
+        target,
+      };
     }
   }
 
@@ -487,7 +602,12 @@ class WhatsAppService {
         };
       }
 
-      pendingConfirmation = this.registerPendingConfirmation(chatId, formattedNumber, message);
+      pendingConfirmation = this.registerPendingConfirmation(
+        chatId,
+        formattedNumber,
+        message,
+        correlationId
+      );
 
       // Send message with sendSeen: false to avoid markedUnread error
       const result = await this.client.sendMessage(chatId, message, {
@@ -495,8 +615,13 @@ class WhatsAppService {
       });
 
       const messageId = getConfirmedMessageId(result);
-      if (pendingConfirmation.confirmed || messageId) {
-        this.confirmPendingConfirmation(pendingConfirmation, messageId);
+      this.capturePendingMessageId({
+        to: chatId,
+        body: message,
+        id: messageId ? { id: messageId } : undefined,
+      });
+
+      if (pendingConfirmation.confirmed) {
         const confirmedMessageId = pendingConfirmation.log.id;
 
         logOperationFinish(context, 'success', {
@@ -521,12 +646,7 @@ class WhatsAppService {
         status: 'pending',
       });
 
-      return {
-        success: true,
-        status: 'pending',
-        message: 'Message accepted and awaiting confirmation.',
-        target: formattedNumber,
-      };
+      return createPendingMessageResponse(formattedNumber);
     } catch (error) {
       if (pendingConfirmation?.confirmed) {
         logOperationFinish(context, 'success', {
@@ -880,7 +1000,8 @@ class WhatsAppService {
   private registerPendingConfirmation(
     chatId: string,
     formattedNumber: string,
-    message: string
+    message: string,
+    correlationId: string
   ): PendingConfirmation {
     const log: MessageLog = {
       timestamp: new Date(),
@@ -895,6 +1016,7 @@ class WhatsAppService {
       chatId,
       message,
       log,
+      correlationId,
       confirmed: false,
       timer,
     };
@@ -908,24 +1030,56 @@ class WhatsAppService {
     return pendingConfirmation;
   }
 
-  private confirmPendingMessage(message: Message): void {
-    if (typeof message.to !== 'string' || typeof message.body !== 'string') {
-      return;
-    }
-
-    const queue = this.pendingConfirmations.get(message.to);
-    const pendingConfirmation = queue?.find((pending) => pending.message === message.body);
-    if (!pendingConfirmation) {
-      return;
-    }
-
-    this.confirmPendingConfirmation(pendingConfirmation, getConfirmedMessageId(message));
+  private findPendingConfirmation(message: OutgoingMessageIdentity): PendingConfirmation | undefined {
+    return findPendingMessageMatch(
+      [...this.pendingConfirmations.values()].flat(),
+      message
+    );
   }
 
-  private confirmPendingConfirmation(pendingConfirmation: PendingConfirmation, messageId?: string): void {
+  private capturePendingMessageId(message: OutgoingMessageIdentity & { id?: unknown }): void {
+    const pendingConfirmation = this.findPendingConfirmation(message);
+    const messageId = getConfirmedMessageId(message);
+    if (pendingConfirmation && messageId) {
+      pendingConfirmation.log.id = messageId;
+    }
+  }
+
+  private handlePendingMessageAck(message: Message, ack: number): void {
+    const pendingConfirmation = this.findPendingConfirmation(message);
+    const messageId = getConfirmedMessageId(message);
+    const status = getMessageStatusFromAck(ack);
+
+    if (!pendingConfirmation) {
+      this.updateConfirmedMessageLog(messageId, status);
+      return;
+    }
+
+    if (messageId) {
+      pendingConfirmation.log.id = messageId;
+    }
+
+    if (status === 'error') {
+      this.failPendingConfirmation(pendingConfirmation, 'WhatsApp rejected the message.');
+      return;
+    }
+
+    if (status !== 'pending') {
+      this.confirmPendingConfirmation(pendingConfirmation, messageId, status);
+    }
+  }
+
+  private confirmPendingConfirmation(
+    pendingConfirmation: PendingConfirmation,
+    messageId?: string,
+    status: Extract<MessageLog['status'], 'sent' | 'delivered' | 'read'> = 'sent'
+  ): void {
     if (pendingConfirmation.confirmed) {
       if (!pendingConfirmation.log.id && messageId) {
         pendingConfirmation.log.id = messageId;
+      }
+      if (status === 'delivered' || status === 'read') {
+        pendingConfirmation.log.status = status;
       }
       return;
     }
@@ -933,7 +1087,7 @@ class WhatsAppService {
     pendingConfirmation.confirmed = true;
     this.removePendingConfirmation(pendingConfirmation);
     pendingConfirmation.log.success = true;
-    pendingConfirmation.log.status = 'sent';
+    pendingConfirmation.log.status = status;
     pendingConfirmation.log.error = undefined;
     if (messageId) {
       pendingConfirmation.log.id = messageId;
@@ -954,10 +1108,80 @@ class WhatsAppService {
       return;
     }
 
+    void this.reconcilePendingConfirmation(pendingConfirmation);
+  }
+
+  private async reconcilePendingConfirmation(pendingConfirmation: PendingConfirmation): Promise<void> {
+    if (!this.isPendingConfirmationActive(pendingConfirmation)) {
+      return;
+    }
+
+    const context = createOperationContext(
+      'whatsapp.reconcile_message_confirmation',
+      pendingConfirmation.correlationId
+    );
+    logOperationStart(context, { target: pendingConfirmation.log.target });
+    let reconciliationFailed = false;
+
+    try {
+      const chat = await this.client.getChatById(pendingConfirmation.chatId);
+      const recentMessages = await chat.fetchMessages({ limit: 10, fromMe: true });
+      const matchingMessage = recentMessages.find(
+        (message) => message.fromMe && message.body === pendingConfirmation.message
+      );
+
+      if (matchingMessage) {
+        this.handlePendingMessageAck(matchingMessage, matchingMessage.ack);
+      }
+    } catch (error) {
+      reconciliationFailed = true;
+      logOperationFinish(context, 'failure', {
+        target: pendingConfirmation.log.target,
+        error: getErrorMessage(error),
+      });
+    }
+
+    if (!this.isPendingConfirmationActive(pendingConfirmation) || pendingConfirmation.confirmed) {
+      if (!reconciliationFailed) {
+        logOperationFinish(context, 'success', {
+          target: pendingConfirmation.log.target,
+          status: pendingConfirmation.log.status,
+        });
+      }
+      return;
+    }
+
     this.removePendingConfirmation(pendingConfirmation);
     pendingConfirmation.log.success = false;
     pendingConfirmation.log.status = 'unconfirmed';
-    pendingConfirmation.log.error = 'Message confirmation timed out.';
+    pendingConfirmation.log.error = 'No WhatsApp server acknowledgement was received within 60 seconds. The message may still have been delivered.';
+    if (!reconciliationFailed) {
+      logOperationFinish(context, 'success', {
+        target: pendingConfirmation.log.target,
+        status: pendingConfirmation.log.status,
+      });
+    }
+  }
+
+  private updateConfirmedMessageLog(messageId: string | undefined, status: MessageAcknowledgementStatus): void {
+    if (!messageId || status === 'pending') {
+      return;
+    }
+
+    const messageLog = this.messageLogs.find((log) => log.id === messageId);
+    if (!messageLog) {
+      return;
+    }
+
+    messageLog.status = status;
+    messageLog.success = status !== 'error';
+    messageLog.error = status === 'error' ? 'WhatsApp rejected the message.' : undefined;
+  }
+
+  private isPendingConfirmationActive(pendingConfirmation: PendingConfirmation): boolean {
+    return this.pendingConfirmations
+      .get(pendingConfirmation.chatId)
+      ?.includes(pendingConfirmation) ?? false;
   }
 
   private removePendingConfirmation(pendingConfirmation: PendingConfirmation): void {

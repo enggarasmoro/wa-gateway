@@ -168,7 +168,11 @@ function renderLogs(logs) {
     item.className = "log-item";
 
     const status = document.createElement("div");
-    const logStatus = log.status === "pending" ? "pending" : log.success ? "success" : "error";
+    const logStatus = ["pending", "unconfirmed"].includes(log.status)
+      ? "pending"
+      : log.success
+        ? "success"
+        : "error";
     status.className = `log-status ${logStatus}`;
 
     const content = document.createElement("div");

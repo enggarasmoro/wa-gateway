@@ -16,7 +16,13 @@ const {
   getMessageResponseHttpStatus,
   getMessageResponsesHttpStatus,
 } = require('../dist/utils/http-status.util');
-const { getConfirmedMessageId } = require('../dist/services/whatsapp.service');
+const {
+  getConfirmedMessageId,
+  getMessageStatusFromAck,
+  findPendingMessageMatch,
+  createPendingMessageResponse,
+  whatsappService,
+} = require('../dist/services/whatsapp.service');
 const { loadSecurityConfig } = require('../dist/config/security.config');
 const { readBooleanEnv, readIntegerEnv } = require('../dist/utils/env.util');
 
@@ -40,6 +46,88 @@ test('hasWhatsAppSendCapability detects the live WhatsApp send runtime', () => {
   assert.equal(hasWhatsAppSendCapability({}), false);
   assert.equal(hasWhatsAppSendCapability({ WWebJS: {} }), false);
   assert.equal(hasWhatsAppSendCapability({ WWebJS: { getChat() {} } }), true);
+});
+
+test('getMessageStatusFromAck only treats server acknowledgement as sent', () => {
+  assert.equal(getMessageStatusFromAck(0), 'pending');
+  assert.equal(getMessageStatusFromAck(1), 'sent');
+  assert.equal(getMessageStatusFromAck(2), 'delivered');
+  assert.equal(getMessageStatusFromAck(3), 'read');
+  assert.equal(getMessageStatusFromAck(-1), 'error');
+});
+
+test('findPendingMessageMatch prefers an exact chat match and only falls back when unambiguous', () => {
+  const pending = [
+    { chatId: '628111@c.us', message: 'same text' },
+    { chatId: '628222@c.us', message: 'other text' },
+  ];
+
+  assert.equal(
+    findPendingMessageMatch(pending, { to: '628111@c.us', body: 'same text' }),
+    pending[0]
+  );
+  assert.equal(
+    findPendingMessageMatch(pending, { to: 'some-lid@lid', body: 'other text' }),
+    pending[1]
+  );
+  assert.equal(
+    findPendingMessageMatch(
+      [
+        { chatId: '628111@c.us', message: 'same text' },
+        { chatId: '628222@c.us', message: 'same text' },
+      ],
+      { to: 'some-lid@lid', body: 'same text' }
+    ),
+    undefined
+  );
+});
+
+test('createPendingMessageResponse preserves the existing API response contract', () => {
+  assert.deepEqual(
+    createPendingMessageResponse('6281234567890'),
+    {
+      success: true,
+      status: 'pending',
+      message: 'Message accepted and awaiting confirmation.',
+      target: '6281234567890',
+    }
+  );
+});
+
+test('queueMessage returns the pending contract without waiting for WhatsApp send completion', async () => {
+  const originalSendMessage = whatsappService.sendMessage;
+  let resolveBackgroundSend;
+  let backgroundStarted = false;
+
+  whatsappService.sendMessage = () => {
+    backgroundStarted = true;
+    return new Promise((resolve) => {
+      resolveBackgroundSend = resolve;
+    });
+  };
+
+  try {
+    const response = whatsappService.queueMessage('6281234567890', 'queued test');
+
+    assert.deepEqual(response, createPendingMessageResponse('6281234567890'));
+    assert.equal(backgroundStarted, true);
+  } finally {
+    whatsappService.sendMessage = originalSendMessage;
+    resolveBackgroundSend?.({
+      success: true,
+      status: 'sent',
+      message: 'Message sent successfully',
+      target: '6281234567890',
+    });
+  }
+});
+
+test('queueMessage returns the existing invalid-number response when called directly with invalid input', () => {
+  const response = whatsappService.queueMessage('invalid', 'queued test');
+
+  assert.equal(response.success, false);
+  assert.equal(response.status, 'invalid_number');
+  assert.equal(response.target, 'invalid');
 });
 
 test('formatPhoneNumber normalizes Indonesian local numbers', () => {
