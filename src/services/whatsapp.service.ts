@@ -31,8 +31,34 @@ interface MessageLog {
   target: string;
   message: string;
   success: boolean;
+  status: 'pending' | 'sent' | 'unconfirmed' | 'error';
   id?: string;
   error?: string;
+}
+
+interface PendingConfirmation {
+  chatId: string;
+  message: string;
+  log: MessageLog;
+  timer: NodeJS.Timeout;
+  confirmed: boolean;
+}
+
+/**
+ * Returns a WhatsApp message ID only when the upstream send result confirms one.
+ */
+export function getConfirmedMessageId(result: unknown): string | undefined {
+  if (result === null || typeof result !== 'object' || !('id' in result)) {
+    return undefined;
+  }
+
+  const message = result.id;
+  if (message === null || typeof message !== 'object' || !('id' in message)) {
+    return undefined;
+  }
+
+  const messageId = message.id;
+  return typeof messageId === 'string' && messageId.length > 0 ? messageId : undefined;
 }
 
 /**
@@ -51,7 +77,9 @@ class WhatsAppService {
   private waState: string = 'IDLE';
   private qrCodeBase64: string | null = null;
   private messageLogs: MessageLog[] = [];
+  private pendingConfirmations = new Map<string, PendingConfirmation[]>();
   private readonly MAX_LOGS = 100;
+  private readonly PENDING_CONFIRMATION_TIMEOUT_MS = 30000;
   private lastReadinessLogAt: number = 0;
   private clientGeneration: number = 0;
   private reconnectTimer: NodeJS.Timeout | null = null;
@@ -241,6 +269,10 @@ class WhatsAppService {
     client.on('message_create', (msg: Message) => {
       if (!this.isActiveClient(generation)) return;
 
+      if (msg.fromMe) {
+        this.confirmPendingMessage(msg);
+      }
+
       if (msg.fromMe && process.env.LOG_LEVEL === 'debug') {
         console.log(`📤 Message sent to ${this.maskTarget(msg.to)}`);
       }
@@ -350,6 +382,7 @@ class WhatsAppService {
         target: this.maskTarget(target),
         message: this.getLoggedMessagePreview(message),
         success: false,
+        status: 'error',
         error: messageText,
       });
 
@@ -384,6 +417,8 @@ class WhatsAppService {
         message: this.getNotReadyMessage(),
       };
     }
+
+    let pendingConfirmation: PendingConfirmation | undefined;
 
     try {
       // whatsapp-web.js format: number@c.us
@@ -433,6 +468,7 @@ class WhatsAppService {
           target: this.maskTarget(formattedNumber),
           message: this.getLoggedMessagePreview(message),
           success: false,
+          status: 'error',
           error: errorMessage,
         });
 
@@ -451,58 +487,87 @@ class WhatsAppService {
         };
       }
 
+      pendingConfirmation = this.registerPendingConfirmation(chatId, formattedNumber, message);
+
       // Send message with sendSeen: false to avoid markedUnread error
       const result = await this.client.sendMessage(chatId, message, {
         sendSeen: false,
       });
 
-      // Increment daily counter
-      this.dailyMessageCount++;
+      const messageId = getConfirmedMessageId(result);
+      if (pendingConfirmation.confirmed || messageId) {
+        this.confirmPendingConfirmation(pendingConfirmation, messageId);
+        const confirmedMessageId = pendingConfirmation.log.id;
 
-      console.log(`✅ Message sent to ${this.maskTarget(formattedNumber)} (ID: ${result.id.id}) [${this.dailyMessageCount}/${this.DAILY_MESSAGE_LIMIT}]`);
+        logOperationFinish(context, 'success', {
+          target: this.maskTarget(formattedNumber),
+          userId: options.userId,
+          status: 'sent',
+          messageId: confirmedMessageId,
+        });
 
-      // Log message
-      this.addMessageLog({
-        timestamp: new Date(),
-        target: this.maskTarget(formattedNumber),
-        message: this.getLoggedMessagePreview(message),
-        success: true,
-        id: result.id.id,
-      });
+        return {
+          success: true,
+          status: 'sent',
+          message: 'Message sent successfully',
+          target: formattedNumber,
+          id: confirmedMessageId,
+        };
+      }
 
       logOperationFinish(context, 'success', {
         target: this.maskTarget(formattedNumber),
         userId: options.userId,
-        status: 'sent',
-        messageId: result.id.id,
+        status: 'pending',
       });
 
       return {
         success: true,
-        status: 'sent',
-        message: 'Message sent successfully',
+        status: 'pending',
+        message: 'Message accepted and awaiting confirmation.',
         target: formattedNumber,
-        id: result.id.id,
       };
     } catch (error) {
+      if (pendingConfirmation?.confirmed) {
+        logOperationFinish(context, 'success', {
+          target: this.maskTarget(formattedNumber),
+          userId: options.userId,
+          status: 'sent',
+          messageId: pendingConfirmation.log.id,
+        });
+
+        return {
+          success: true,
+          status: 'sent',
+          message: 'Message sent successfully',
+          target: formattedNumber,
+          id: pendingConfirmation.log.id,
+        };
+      }
+
       console.error(`❌ Error sending message:`, error);
 
       const isRecoverableRuntimeError = this.handleRuntimeError(error, 'sendMessage');
+      const errorMessage = getErrorMessage(error);
 
-      // Log error
-      this.addMessageLog({
-        timestamp: new Date(),
-        target: this.maskTarget(formattedNumber),
-        message: this.getLoggedMessagePreview(message),
-        success: false,
-        error: (error as Error).message,
-      });
+      if (pendingConfirmation) {
+        this.failPendingConfirmation(pendingConfirmation, errorMessage);
+      } else {
+        this.addMessageLog({
+          timestamp: new Date(),
+          target: this.maskTarget(formattedNumber),
+          message: this.getLoggedMessagePreview(message),
+          success: false,
+          status: 'error',
+          error: errorMessage,
+        });
+      }
 
       logOperationFinish(context, 'failure', {
         target: this.maskTarget(formattedNumber),
         userId: options.userId,
         status: isRecoverableRuntimeError ? 'disconnected' : 'error',
-        error: (error as Error).message,
+        error: errorMessage,
       });
 
       return {
@@ -812,6 +877,115 @@ class WhatsAppService {
     return this.LOG_MESSAGE_CONTENT ? message.substring(0, 100) : '[redacted]';
   }
 
+  private registerPendingConfirmation(
+    chatId: string,
+    formattedNumber: string,
+    message: string
+  ): PendingConfirmation {
+    const log: MessageLog = {
+      timestamp: new Date(),
+      target: this.maskTarget(formattedNumber),
+      message: this.getLoggedMessagePreview(message),
+      success: false,
+      status: 'pending',
+    };
+    let pendingConfirmation: PendingConfirmation;
+    const timer = setTimeout(() => this.timeoutPendingConfirmation(pendingConfirmation), this.PENDING_CONFIRMATION_TIMEOUT_MS);
+    pendingConfirmation = {
+      chatId,
+      message,
+      log,
+      confirmed: false,
+      timer,
+    };
+
+    pendingConfirmation.timer.unref();
+    this.addMessageLog(log);
+    const queue = this.pendingConfirmations.get(chatId) ?? [];
+    queue.push(pendingConfirmation);
+    this.pendingConfirmations.set(chatId, queue);
+
+    return pendingConfirmation;
+  }
+
+  private confirmPendingMessage(message: Message): void {
+    if (typeof message.to !== 'string' || typeof message.body !== 'string') {
+      return;
+    }
+
+    const queue = this.pendingConfirmations.get(message.to);
+    const pendingConfirmation = queue?.find((pending) => pending.message === message.body);
+    if (!pendingConfirmation) {
+      return;
+    }
+
+    this.confirmPendingConfirmation(pendingConfirmation, getConfirmedMessageId(message));
+  }
+
+  private confirmPendingConfirmation(pendingConfirmation: PendingConfirmation, messageId?: string): void {
+    if (pendingConfirmation.confirmed) {
+      if (!pendingConfirmation.log.id && messageId) {
+        pendingConfirmation.log.id = messageId;
+      }
+      return;
+    }
+
+    pendingConfirmation.confirmed = true;
+    this.removePendingConfirmation(pendingConfirmation);
+    pendingConfirmation.log.success = true;
+    pendingConfirmation.log.status = 'sent';
+    pendingConfirmation.log.error = undefined;
+    if (messageId) {
+      pendingConfirmation.log.id = messageId;
+    }
+    this.dailyMessageCount++;
+    console.log(`✅ Message sent to ${pendingConfirmation.log.target} [${this.dailyMessageCount}/${this.DAILY_MESSAGE_LIMIT}]`);
+  }
+
+  private failPendingConfirmation(pendingConfirmation: PendingConfirmation, error: string): void {
+    this.removePendingConfirmation(pendingConfirmation);
+    pendingConfirmation.log.success = false;
+    pendingConfirmation.log.status = 'error';
+    pendingConfirmation.log.error = error;
+  }
+
+  private timeoutPendingConfirmation(pendingConfirmation: PendingConfirmation): void {
+    if (pendingConfirmation.confirmed) {
+      return;
+    }
+
+    this.removePendingConfirmation(pendingConfirmation);
+    pendingConfirmation.log.success = false;
+    pendingConfirmation.log.status = 'unconfirmed';
+    pendingConfirmation.log.error = 'Message confirmation timed out.';
+  }
+
+  private removePendingConfirmation(pendingConfirmation: PendingConfirmation): void {
+    clearTimeout(pendingConfirmation.timer);
+    const queue = this.pendingConfirmations.get(pendingConfirmation.chatId);
+    if (!queue) {
+      return;
+    }
+
+    const remaining = queue.filter((pending) => pending !== pendingConfirmation);
+    if (remaining.length === 0) {
+      this.pendingConfirmations.delete(pendingConfirmation.chatId);
+      return;
+    }
+
+    this.pendingConfirmations.set(pendingConfirmation.chatId, remaining);
+  }
+
+  private clearPendingConfirmations(error: string): void {
+    const pending = [...this.pendingConfirmations.values()].flat();
+    for (const pendingConfirmation of pending) {
+      this.removePendingConfirmation(pendingConfirmation);
+      pendingConfirmation.log.success = false;
+      pendingConfirmation.log.status = 'unconfirmed';
+      pendingConfirmation.log.error = error;
+    }
+  }
+
   private isActiveClient(generation: number): boolean {
     return generation === this.clientGeneration;
   }
@@ -841,6 +1015,7 @@ class WhatsAppService {
   private async replaceFailedClient(reason: string): Promise<void> {
     const failedClient = this.client;
     this.clientGeneration++;
+    this.clearPendingConfirmations('Message confirmation unavailable because WhatsApp client is restarting.');
 
     failedClient.removeAllListeners();
 
@@ -990,6 +1165,7 @@ class WhatsAppService {
     console.log('🛑 Shutting down WhatsApp client...');
     this.isShuttingDown = true;
     this.clearReconnectTimer();
+    this.clearPendingConfirmations('Message confirmation unavailable because the gateway is shutting down.');
 
     if (this.client) {
       try {
@@ -1018,6 +1194,7 @@ class WhatsAppService {
 
     this.isLoggingOut = true;
     this.clearReconnectTimer();
+    this.clearPendingConfirmations('Message confirmation unavailable because WhatsApp is logging out.');
     const oldClient = this.client;
 
     try {

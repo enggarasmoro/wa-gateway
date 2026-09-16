@@ -11,7 +11,7 @@ export interface BroadcastRequest {
 
 export interface MessageResponse {
   success: boolean;
-  status: 'sent' | 'error' | 'disconnected' | 'invalid_number' | 'rate_limited';
+  status: 'sent' | 'pending' | 'unconfirmed' | 'error' | 'disconnected' | 'invalid_number' | 'rate_limited';
   message: string;
   target?: string;
   id?: string;

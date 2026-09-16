@@ -293,6 +293,12 @@
         color: var(--error);
       }
 
+      .send-result.pending {
+        background: rgba(255, 170, 0, 0.1);
+        border: 1px solid var(--warning);
+        color: var(--warning);
+      }
+
       .action-result {
         margin-top: 0.75rem;
         padding: 0.625rem 0.75rem;
@@ -346,6 +352,9 @@
       }
       .log-status.error {
         background: var(--error);
+      }
+      .log-status.pending {
+        background: var(--warning);
       }
 
       .log-content {

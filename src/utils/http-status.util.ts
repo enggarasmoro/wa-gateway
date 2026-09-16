@@ -1,6 +1,10 @@
 import { MessageResponse } from '../types';
 
 export function getMessageResponseHttpStatus(response: MessageResponse): number {
+  if (response.status === 'pending') {
+    return 202;
+  }
+
   if (response.success) {
     return 200;
   }
@@ -12,6 +16,8 @@ export function getMessageResponseHttpStatus(response: MessageResponse): number 
       return 429;
     case 'disconnected':
       return 503;
+    case 'unconfirmed':
+      return 502;
     case 'error':
     case 'sent':
       return 500;
@@ -23,8 +29,12 @@ export function getMessageResponsesHttpStatus(responses: MessageResponse[]): num
     return 500;
   }
 
+  if (responses.every((response) => response.status === 'pending')) {
+    return 202;
+  }
+
   if (responses.every((response) => response.success)) {
-    return 200;
+    return responses.some((response) => response.status === 'pending') ? 207 : 200;
   }
 
   if (responses.some((response) => response.success)) {

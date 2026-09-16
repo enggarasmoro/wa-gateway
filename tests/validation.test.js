@@ -16,6 +16,7 @@ const {
   getMessageResponseHttpStatus,
   getMessageResponsesHttpStatus,
 } = require('../dist/utils/http-status.util');
+const { getConfirmedMessageId } = require('../dist/services/whatsapp.service');
 const { loadSecurityConfig } = require('../dist/config/security.config');
 const { readBooleanEnv, readIntegerEnv } = require('../dist/utils/env.util');
 
@@ -338,6 +339,36 @@ test('getMessageResponseHttpStatus maps expected send failures', () => {
   assert.equal(getMessageResponseHttpStatus({ success: false, status: 'error', message: 'failed' }), 500);
 });
 
+test('getMessageResponseHttpStatus maps pending confirmation to accepted', () => {
+  assert.equal(
+    getMessageResponseHttpStatus({
+      success: true,
+      status: 'pending',
+      message: 'Message accepted and awaiting confirmation.',
+    }),
+    202
+  );
+});
+
+test('getMessageResponseHttpStatus maps timed out confirmation to bad gateway', () => {
+  assert.equal(
+    getMessageResponseHttpStatus({
+      success: false,
+      status: 'unconfirmed',
+      message: 'WhatsApp accepted the send request but did not return a message ID; delivery is unconfirmed.',
+    }),
+    502
+  );
+});
+
+test('getConfirmedMessageId rejects missing WhatsApp send results and message ids', () => {
+  assert.equal(getConfirmedMessageId(undefined), undefined);
+  assert.equal(getConfirmedMessageId({}), undefined);
+  assert.equal(getConfirmedMessageId({ id: {} }), undefined);
+  assert.equal(getConfirmedMessageId({ id: { id: '' } }), undefined);
+  assert.equal(getConfirmedMessageId({ id: { id: 'confirmed-message-id' } }), 'confirmed-message-id');
+});
+
 test('getMessageResponsesHttpStatus maps aggregate send failures', () => {
   assert.equal(getMessageResponsesHttpStatus([
     { success: true, status: 'sent', message: 'ok' },
@@ -358,5 +389,21 @@ test('getMessageResponsesHttpStatus maps aggregate send failures', () => {
   assert.equal(getMessageResponsesHttpStatus([
     { success: false, status: 'disconnected', message: 'offline' },
     { success: false, status: 'rate_limited', message: 'limit' },
+  ]), 207);
+  assert.equal(getMessageResponsesHttpStatus([
+    { success: false, status: 'unconfirmed', message: 'delivery unknown' },
+    { success: false, status: 'unconfirmed', message: 'delivery unknown' },
+  ]), 502);
+  assert.equal(getMessageResponsesHttpStatus([
+    { success: true, status: 'sent', message: 'ok' },
+    { success: false, status: 'unconfirmed', message: 'delivery unknown' },
+  ]), 207);
+  assert.equal(getMessageResponsesHttpStatus([
+    { success: true, status: 'pending', message: 'awaiting confirmation' },
+    { success: true, status: 'pending', message: 'awaiting confirmation' },
+  ]), 202);
+  assert.equal(getMessageResponsesHttpStatus([
+    { success: true, status: 'sent', message: 'ok' },
+    { success: true, status: 'pending', message: 'awaiting confirmation' },
   ]), 207);
 });

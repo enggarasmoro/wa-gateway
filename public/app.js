@@ -168,7 +168,8 @@ function renderLogs(logs) {
     item.className = "log-item";
 
     const status = document.createElement("div");
-    status.className = `log-status ${log.success ? "success" : "error"}`;
+    const logStatus = log.status === "pending" ? "pending" : log.success ? "success" : "error";
+    status.className = `log-status ${logStatus}`;
 
     const content = document.createElement("div");
     content.className = "log-content";
@@ -217,11 +218,12 @@ document.getElementById("sendForm").addEventListener("submit", async (e) => {
     });
 
     const data = await res.json();
+    const isPending = data.status === "pending";
     resultEl.textContent = data.message;
-    resultEl.className = "send-result " + (data.success ? "success" : "error");
+    resultEl.className = "send-result " + (isPending ? "pending" : data.success ? "success" : "error");
     resultEl.style.display = "block";
 
-    if (data.success) {
+    if (data.success || isPending) {
       document.getElementById("message").value = "";
       fetchLogs();
     }
